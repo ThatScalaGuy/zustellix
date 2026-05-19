@@ -1,0 +1,1468 @@
+openapi: 3.0.1
+info:
+  title: DVDV2 öffentliche API
+  description: |-
+    Öffentliche, lesende API für das DVDV, Version v2. 
+    In diesem Dokument sind die öffentlichen Directory-Schnittstellen des DVDV2-Kernsystems in Version v2 dokumentiert. 
+
+    __Der DVDV-Server bietet diese Schnittstelle inzwischen in der neueren Version v3 an. Bitte bevorzugen Sie diese.__ 
+
+    Es richtet sich also an erstens an Fachverfahrens-Entwickler, die diese Schnittstellen direkt aufrufen wollen, statt eine der DVDV-Bibliotheken zu verwenden,
+    und zweitens an Entwickler, die die Schnittstellen des DVDV2-Kernsystems nachbilden wollen.
+
+    Die URL, unter der Sie die u.a. Endpunkte erreichen, ergibt sich aus der URL Ihres DVDV-Betreibers, gefolgt vom sogenannten 'entryPath/', gefolgt von der Schnittstellen-Version 'v2/', gefolgt vom jeweiligen Funktionsnamen.
+
+    Diese Version v2 ersetzt in die bisherige Version v1 (für die die URL keine Schnittstellenversion enthielt) vollumfänglich. 
+    Für den entryPath gibt es dabei folgende Werte: 
+
+    (1) intern/directory (für rechenzentrumsinternen, unauthentifizierten Zugriff)
+
+    (2) extern/standaloneauth/directory (für die Standalone-Authentifzierung, also mit einem vom DVDV-Server ausgestellten Token), und 
+
+    (3) extern/bundesmasterauth/directory (für die Authentifizierung am IAM des Bundesmaster-Betreibers.).
+
+    Damit ergibt sich z.B. https://ihr-dvdv-betreiber/dvdv2-backend/extern/standaloneauth/directory/findauthoritydescription
+
+    Eine Sonderrolle spielt der Endpunkt extern/standaloneauth/token (siehe Methode createToken).
+    Diesen benötigen Sie zum Erzeugen eines Tokens im Falle der Standalone-Authentifzierung.
+
+    Wenn Sie diese Schnittstelle direkt aufrufen (ohne eine DVDV-Bibliothek), denken Sie daran, das vom Server bereitgestellte TLS-Zertifikat auf Gültigkeit und Vertrauenswürdigkeit des Herausgebers zu prüfen.
+  contact:
+    name: Dataport AöR
+    url: 'https://www.dataport.de/'
+    email: dvdv-development@dataport.de
+  license:
+    name: EUPL 1.2
+    url: 'https://eupl.eu/1.2/de/'
+  version: v2 - 2.15.0
+paths:
+  /extern/standaloneauth/token:
+    post:
+      summary: Liefert ein Access-Token
+      description: |-
+        Erzeugt ein Access-Token, mit dem der Aufrufer sich in nachfolgenden, fachlichen Requests authentifizieren kann.
+        Diese Variante der Authentifizierung heißt 'Standalone-Authentifizierung'.
+        Die Funktionsweise ist fast konform zu einem Spezialfall des OpenIdConnect-Standards:
+        Die Request-Parameter und die Struktur der Response sind konform zum OpenIdConnect-Standard.
+        Der Aufrufer fügt das in dieser Response enthalten Token in den nachfolgenden fachlichen Requests in den Standard-HTTP-Header 'Authorization' ein, 
+        aber (und das ist die einzige Abweichung vom OpenIdConnect-Standard), mit dem Schlüssel 'EmbeddedBearer' anstelle von 'Bearer'.
+      operationId: createToken
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  description: 'Der Wert sollte lauten: ''client_credentials'''
+                client_assertion_type:
+                  type: string
+                  description: 'Der Wert sollte lauten: ''urn:ietf:params:oauth:client-assertion-type:jwt-bearer'''
+                client_assertion:
+                  type: string
+                  description: 'Das RS256-signierte JWT-Token. Dieses JWT-Token muss ein subject der Form ''fp:<Zertifikatsfingerprint>'' haben für ein Client-Zertifikat im DVDV.'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AccessToken'
+              examples:
+                Tagesgültiges Token:
+                  description: Tagesgültiges Token
+                  value:
+                    accessToken: eyJhbGciO..fC7CGKIZA
+                    expiresIn: 86400
+                    refreshExpiresIn: 0
+                    tokenType: Bearer
+                    notBeforePolicy: 0
+                    scope: email profile dvdv2-kernsystem-application-client-scope
+        '401':
+          description: Kein passendes Client-Zertifikat
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Kein passendes Client-Zertifikat:
+                  description: Kein passendes Client-Zertifikat
+                  value:
+                    type: problems/type/AUTHENTICATION
+                    title: Fehler bei der Standalone-Authentifizierung
+                    status: 401
+                    detail: Kein passendes Client-Zertifikat gefunden für fingerprint 0d...dd5
+                    instance: problems/instance/StandaloneAuthentication
+  '/{entryPath}/v2/batch/findauthoritydescription':
+    post:
+      summary: findauthoritydescription (batch-Variante)
+      description: batch-Variante von findauthoritydescription
+      operationId: batchFindAuthorityDescription
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''category'' und ''organizationKey'' müssen gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OrganizationDescription'
+  '/{entryPath}/v2/batch/findcategories':
+    post:
+      summary: findcategories (batch-Variante)
+      description: batch-Variante von findCategories
+      operationId: batchFindCategories
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''fingerPrint'' und ''organizationKey'' müssen gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  type: array
+                  items:
+                    type: string
+  '/{entryPath}/v2/batch/findOrganizationsByServiceElement':
+    post:
+      summary: findOrganizationsByServiceElement (batch-Variante)
+      description: batch-Variante von findOrganizationsByServiceElement
+      operationId: batchFindOrganizationsByServiceElement
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''serviceElementType'', ''parameterType'' und ''Value'' müssen gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OrganizationDescription'
+  '/{entryPath}/v2/batch/findservicedescription':
+    post:
+      summary: findservicedescription (batch-Variante)
+      description: batch-Variante von findservicedescription
+      operationId: batchFindServiceDescription
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''organizationKey'' und ''serviceSpecificationUri'' müssen gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Service'
+  '/{entryPath}/v2/batch/findServiceSpecificationUrisByCategory':
+    post:
+      summary: findServiceSpecificationUrisByCategory (batch-Variante)
+      description: batch-Variante von findServiceSpecificationUrisByCategory
+      operationId: batchFindServiceSpecificationUrisByCategory
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''category'' muss gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Request'
+  '/{entryPath}/v2/batch/verifycategory':
+    post:
+      summary: verifycategory (batch-Variante)
+      description: batch-Variante von verifyCategory
+      operationId: batchVerifyCategory
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      requestBody:
+        description: 'Anfrageparameter, nur ''fingerPrint'' und ''category'' müssen gefüllt sein'
+        content:
+          application/json; charset=utf-8:
+            schema:
+              maxItems: 200
+              type: array
+              items:
+                $ref: '#/components/schemas/Request'
+        required: true
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VerificationResult'
+  '/{entryPath}/v2/categories':
+    get:
+      summary: categories
+      description: Liefert den Baum aller im DVDV verzeichneten Kategorien. Dieser ist seit DVDV 2.15.0 auf allen Baumebenen alphabetisch sortiert.
+      operationId: findAllCategories
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DirectoryOrganizationCategoryLevel1DTO'
+        '401':
+          description: 'Nicht authentifiziert. Es ist eine Authentifizierung notwendig, um diese Aktion auszuführen.'
+  '/{entryPath}/v2/findauthoritydescription':
+    get:
+      summary: 'findauthoritydescription: Organisationsermittlung'
+      description: 'Entspricht der Schnittstelle ''FindAuthorityDescription'' des Altsystems DVDV 1. Wird benutzt von den DVDV-Bibliotheks-Funktionen findOrganizationDescription und findAuthorityDescription. Die Schnittstelle liefert zu einem gegebenen Organisationsschlüssel und der zugeordneten Organisationskategorie die Beschreibung der Organisation und des zugehörigen Organisation-Stellvertreters, sofern vorhanden. Vom DirectoryRequestDto müssen dementsprechend nur die Felder ''category'' und ''organizationKey'' gefüllt sein.'
+      operationId: findAuthorityDescription
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit Feldern 'category' und 'organizationKey'
+          required: true
+          schema:
+            type: string
+          example: '{"category":"Meldebehörde","organizationKey":"ags:01999001"}'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OrganizationDescription'
+        '204':
+          description: Organisation konnte nicht gefunden werden.
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+                Fehlende Kategorie-Angabe:
+                  description: Fehlende Kategorie-Angabe
+                  value:
+                    type: problems/type/SERVICE_VALIDATION
+                    title: Invalider Request
+                    status: 400
+                    detail: Parameter 'category' fehlt
+                    instance: problems/instance/RestValidation
+        '404':
+          description: Organisation konnte nicht gefunden werden.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Kein Treffer:
+                  description: Kein Treffer
+                  value:
+                    type: problems/type/ENTITY_NOT_FOUND
+                    title: Entität nicht gefunden
+                    status: 404
+                    detail: '5009: Keine Organisation mit Kategorie "Meldebehörde" und Organisationsschlüssel "ags:irrtum" gefunden'
+                    instance: problems/instance/DirectoryEntityNotFound
+  '/{entryPath}/v2/findauthoritydescriptions':
+    get:
+      summary: 'findauthoritydescriptions: Organisationsermittlung ohne Kategorie'
+      description: 'Wie findauthoritydescription, nur ohne Angabe einer Kategorie. Dadurch kann es mehrere Treffer geben, das ist aber vergleichsweise selten. Vom DirectoryRequestDto muss dementsprechend nur das Feld ''organizationKey'' gefüllt sein.'
+      operationId: findAuthorityDescriptions
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit Feld 'organizationKey'
+          required: true
+          schema:
+            type: string
+          example: '{"organizationKey":"ags:01999001"}'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrganizationDescription'
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+  '/{entryPath}/v2/intermediaries':
+    get:
+      summary: intermediaries
+      description: Liefert eine Liste aller im DVDV verzeichneten Intermediäre.
+      operationId: findByType
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SummaryServiceElementDTO'
+        '401':
+          description: 'Nicht authentifiziert. Es ist eine Authentifizierung notwendig, um diese Aktion auszuführen.'
+  '/{entryPath}/v2/findcategories':
+    get:
+      summary: 'findcategories: Kategorienermittlung'
+      description: 'Wird benutzt von der DVDV-Bibliotheks-Funktion findCategories. Ermittelt diejenigen Kategorien (typischerweise genau eine), zu denen es eine Organisation mit dem gegebenen Client-Zertifikat und Organisationsschlüssel gibt. Dabei handelt es sich um die Blätter des Kategorienbaumes, z.B. ''Meldebörde'', ''Passbehörde'', ''StA'''
+      operationId: findCategories
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit Feldern 'fingerPrint' und 'organizationKey'
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  type: string
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+                Fehlende Organisationsschlüssel-Angabe:
+                  description: Fehlende Organisationsschlüssel-Angabe
+                  value:
+                    type: problems/type/SERVICE_VALIDATION
+                    title: Invalider Request
+                    status: 400
+                    detail: Parameter 'organizationKey' fehlt
+                    instance: problems/instance/RestValidation
+  '/{entryPath}/v2/findCertificateByFingerprint':
+    get:
+      summary: 'findCertificateByFingerprint: Ermittlung des Zertifikats'
+      description: Ermittelt das Zertifikat mit dem angegebenen Fingerprint. Vom DirectoryRequestDTO muss dementsprechend nur das Feld 'FingerPrint' gefüllt sein.
+      operationId: findCertificateByFingerprint
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit dem Feld 'fingerPrint'
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Certificate'
+        '404':
+          description: Kein oder mehr als ein Zertifikat gefunden.
+  '/{entryPath}/v2/findOrganizationsByServiceElement':
+    get:
+      summary: 'findOrganizationsByServiceElement: Query mit Dienstelementeigenschaften'
+      description: 'Findet die Organisationen, die ein Dienstelement haben, das auf die in den Parametern angegebene Query passt.'
+      operationId: findOrganizationsByServiceElement
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: 'JSON-String mit Feldern ''serviceElementType'', ''parameterType'' und ''parameterValue'''
+          required: true
+          schema:
+            type: string
+          example: '{"serviceElementType":"OSCI_ADDRESSEE","parameterType":"CIPHER_CERTIFICATE","parameterValue":"80157bbb3934cb651fb4df94a98773fba0b02b03"}'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OrganizationDescription'
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+                Falsche Parameter:
+                  description: Falsche Parameter
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{"serviceElementType":"Irrtum","parameterType":"Hier ist ein","parameterValue":"Fehler im Request"}'''
+                    instance: problems/instance/RequestJsonProcessing
+  '/{entryPath}/v2/findservicedescription':
+    get:
+      summary: 'findservicedescription_v2: Ermittlung eines gültigen Diensts'
+      description: Entspricht der Schnittstelle 'FindServiceDescription' des Altsystems DVDV 1. Wird benutzt von der DVDV-Bibliotheks-Funktion findServiceDescription. Die Schnittstelle liefert zu einem gegebenen Organisationsschlüssel und einer Dienstbeschreibungs-URI die Beschreibung des aktuell gültigen Dienstes mit allen Verbindungsparametern. Vom DirectoryRequestDto müssen dementsprechend nur die Felder 'organizationKey' und 'serviceSpecificationUri' gefüllt sein.
+      operationId: findServiceDescription
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit Feldern 'organizationKey' und 'serviceSpecificationUri'
+          required: true
+          schema:
+            type: string
+          example: '{"organizationKey":"ags:01999001","serviceSpecificationUri":"http://www.osci.de/xauslaender1100/xauslaender1100ABHABH.wsdl"}'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Service'
+        '204':
+          description: 'Kein gültiger passender Dienst gefunden. Für den Fall, dass ein ungültiger passender Dienst gefunden wurde, beachten Sie den Header dvdv-warning-msg. Dieser enthält ggf. eine RFC-2047-kodierte Warnungsmeldung.'
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+        '404':
+          description: Kein gültiger passender Dienst gefunden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Kein Treffer:
+                  description: Kein Treffer
+                  value:
+                    type: problems/type/ENTITY_NOT_FOUND
+                    title: Entität nicht gefunden
+                    status: 404
+                    detail: '5005: Kein Dienst zum Organisationsschlüssel ''ags:gibsnich'' und URI http://www.osci.de/xinneres/rueckweisung/3/xinneresrueckweisungv3.wsdl.'
+                    instance: problems/instance/DirectoryEntityNotFound
+  '/{entryPath}/v2/findServiceSpecificationUrisByCategory':
+    get:
+      summary: findServiceSpecificationUrisByCategory
+      description: 'Liefert alle Dienstbeschreibungs-URIs, die von Organisationen der angegebenen Kategorie angeboten werden dürfen.'
+      operationId: findServiceSpecificationUrisByCategory
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit dem Feld 'category'
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceBase'
+        '401':
+          description: 'Nicht authentifiziert. Es ist eine Authentifizierung notwendig, um diese Aktion auszuführen.'
+  '/{entryPath}/v2/version':
+    get:
+      summary: getServiceVersion
+      description: 'Gibt die Version der Software des DVDV2-Servers als JSON zurück. Keys: version, buildnunmber, schemaversion'
+      operationId: getServiceVersion
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '401':
+          description: 'Nicht authentifiziert. Es ist eine Authentifizierung notwendig, um diese Aktion auszuführen.'
+  '/{entryPath}/v2/verifycategory':
+    get:
+      summary: 'verifycategory: Kategorienüberprüfung'
+      description: 'Entspricht der Schnittstelle ''VerifyCategory'' des Altsystems DVDV 1. Wird benutzt von der DVDV-Bibliotheks-Funktion verifyCategory. Die Schnittstelle liefert zu einem gegebenen Zertifikat-Fingerprint und der zugeordneten Organisationskategorie ein Prüfergebnis ''true'' oder ''false''. Das Ergebnis ist genau dann ''true'', wenn es eine Organisation mit der angegebenen Organisationskategorie gibt, für die das übermittelte Zertifikat als Client-Zertifikat hinterlegt ist. Vom DirectoryRequestDto müssen dementsprechend nur die Felder ''fingerPrint'' und ''category'' gefüllt sein.'
+      operationId: verifyCategory
+      parameters:
+        - name: entryPath
+          in: path
+          description: URI-Präfix inkl. Authentifizierungsvariante
+          required: true
+          schema:
+            pattern: intern\/directory|extern\/bundesmasterauth\/directory|extern\/standaloneauth\/directory
+            type: string
+            enum:
+              - intern/directory
+              - extern/bundesmasterauth/directory
+              - extern/standaloneauth/directory
+        - name: request_json
+          in: query
+          description: JSON-String mit Feldern 'fingerPrint' und 'category'
+          required: true
+          schema:
+            type: string
+          example: '{"fingerPrint":"11:51:43:a1:b5:fc:8b:b7:0a:3a:a9:b1:0f:66:73:22","category":"Behörde"}'
+      responses:
+        '200':
+          description: Aktion erfolgreich ausgeführt
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        '400':
+          description: Es wurden ungültige Anfrageparameter übermittelt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                Nicht-wohlgeformtes JSON:
+                  description: Nicht-wohlgeformtes JSON
+                  value:
+                    type: problems/type/INPUT_VALIDATION
+                    title: Invalide Eingabe
+                    status: 400
+                    detail: '7006: Fehler bei JSON-Konvertierung für URL-Query-Parameter request_json=''{Nonsense-Eingabe'''
+                    instance: problems/instance/RequestJsonProcessing
+                Fehlende Kategorie-Angabe:
+                  description: Fehlende Kategorie-Angabe
+                  value:
+                    type: problems/type/SERVICE_VALIDATION
+                    title: Invalider Request
+                    status: 400
+                    detail: Parameter 'category' fehlt
+                    instance: problems/instance/RestValidation
+components:
+  schemas:
+    AccessToken:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: 'Das eigentliche Token, das der Aufrufer in nachfolgenden Requests im Authorization-Header im Schlüssel ''EmbeddedBearer'' benutzen sollte.'
+        expires_in:
+          type: integer
+          description: Zeit bis zum  Verfall in Sekunden.
+          format: int64
+        refresh_expires_in:
+          type: integer
+          description: |-
+            Zeit bis zum Verfall des Refresh-Tokens in Sekunden
+            Hinweis: Token-Refresh wird zurzeit nicht unterstützt und ist auch nicht sinnvoll.
+          format: int64
+        refresh_token:
+          type: string
+          description: 'Hinweis: Token-Refresh wird zurzeit nicht unterstützt und ist auch nicht sinnvoll.'
+        token_type:
+          type: string
+        id_token:
+          type: string
+        not-before-policy:
+          type: integer
+          format: int32
+        session_state:
+          type: string
+        scope:
+          type: string
+        otherClaims:
+          type: object
+          additionalProperties:
+            type: object
+      description: Access-Token gemäß OpenIdConnect-Standard.
+    Problem:
+      type: object
+      properties:
+        instance:
+          type: string
+          description: 'Relative URI-Referenz, die das spezifische Auftreten dieses Problems identifiziert. Änderungen hieran gelten als "non-breaking change".'
+          format: URI reference
+        type:
+          type: string
+          description: 'Relative URI-Referenz, die den Problemtyp bestimmt. Änderungen hieran gelten als "breaking change", daher eignet sich der Rückgabewert zum Switchen.'
+          format: URI reference
+        status:
+          type: integer
+          description: 'HTTP status code (https://datatracker.ietf.org/doc/html/rfc7231#section-6) vom DVDV-Server.'
+          format: int32
+        title:
+          type: string
+          description: 'Kurze, nutzerlesbare Beschreibung des Problemtyps.'
+        detail:
+          type: string
+          description: 'Nutzerlesbare, detallierte Beschreibung des Problems.'
+    Request:
+      type: object
+      properties:
+        fingerPrint:
+          maxLength: 40
+          minLength: 40
+          type: string
+          description: Zertifikat-Fingerprint
+          example: 0272c56c9742a62501329a3aa78974f1605c92a2
+        category:
+          maxLength: 255
+          type: string
+          description: Eindeutige Behördenkategoriebezeichnung
+          example: Meldebehörde
+        organizationKey:
+          maxLength: 255
+          minLength: 6
+          type: string
+          description: Behördenschlüsselname
+          example: 'ags:05009999'
+        serviceSpecificationUri:
+          maxLength: 1000
+          minLength: 9
+          type: string
+          description: Name der Dienstbeschreibungs-URI
+        serviceElementType:
+          type: string
+          description: Typ der Dienstbeschreibung
+          enum:
+            - OSCI_INTERMEDIARY
+            - OSCI_ADDRESSEE
+            - CIPHER_CERTIFICATE
+            - SIGNATURE_CERTIFICATE
+            - WEBSERVER
+            - TEXT
+        customServiceElementType:
+          type: string
+          description: Name des konfigurierbaren Typs der Dienstbeschreibung (falls serviceElementType fehlt)
+        parameterType:
+          type: string
+          description: Typ des Anfrageparameters
+          enum:
+            - CIPHER_CERTIFICATE
+            - SIGNATURE_CERTIFICATE
+            - URI
+        parameterValue:
+          type: string
+          description: Wert des Anfrageparameters. Die Bedeutung hängt ab von parameterType.
+      description: Generisches Requestobjekt für verschiedene Anfragen an die Directory/Legacy-Schnittstelle
+    Certificate:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Zertifikatdatei als Base64-enkodierter String
+        fingerprint:
+          maxLength: 40
+          minLength: 40
+          type: string
+          description: Fingerprint
+          format: hexadezimal
+          example: 0272c56c9742a62501329a3aa78974f1605c92a2
+        serial:
+          maxLength: 49
+          type: string
+          description: Seriennummer (Dezimaldarstellung)
+          format: dezimal
+        serialHex:
+          maxLength: 40
+          type: string
+          description: Seriennummer (Hexadezimaldarstellung)
+          format: hexadezimal
+        emailSubject:
+          maxLength: 255
+          minLength: 3
+          type: string
+          description: E-Mail Inhaber
+        algorithm:
+          maxLength: 255
+          minLength: 3
+          type: string
+          description: Verschlüsselungsalgorithmus
+          example: SHA256withRSA
+        nameIssuer:
+          maxLength: 255
+          type: string
+          description: Name des Ausstellers
+        nameSubject:
+          maxLength: 255
+          type: string
+          description: Name des Inhabers
+        organizationIssuer:
+          maxLength: 255
+          type: string
+          description: Organization des Ausstellers
+        organizationSubject:
+          maxLength: 255
+          type: string
+          description: Organization des Inhabers
+        ouIssuer:
+          maxLength: 255
+          type: string
+          description: Ou-Issuer
+        ouSubject:
+          maxLength: 255
+          type: string
+          description: Ou-Subject
+        validFrom:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Start)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+        validTo:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Ende)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+        x509KeyUsage:
+          maximum: 32767
+          minimum: 0
+          type: integer
+          description: '16-Bit Bitmap für KeyUsage gemäß X.509-Standard, siehe https://tools.ietf.org/html/rfc5280#page-29, oder null, falls das Zertifikat die KeyUsage-Extension nicht benutzt'
+          format: int32
+        revocationDate:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: CRL Widerrufsdatum
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+          nullable: true
+        revocationReason:
+          maxLength: 32
+          type: string
+          description: CRL-Widerrufsgrund
+          enum:
+            - UNSPECIFIED
+            - KEY_COMPROMISE
+            - CA_COMPROMISE
+            - AFFILIATION_CHANGED
+            - SUPERSEDED
+            - CESSATION_OF_OPERATION
+            - CERTIFICATE_HOLD
+            - UNUSED
+            - REMOVE_FROM_CRL
+            - PRIVILEGE_WITHDRAWN
+            - AA_COMPROMISE
+      description: Repräsentation eines Zertifikates
+    Organization:
+      required:
+        - category
+        - id
+        - nameDe
+        - organizationKeys
+      type: object
+      properties:
+        id:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische Datenbank-ID
+          format: int64
+        validFrom:
+          type: string
+          description: Gültigkeitszeitraum (Start)
+          nullable: true
+        validTo:
+          type: string
+          description: Gültigkeitszeitraum (Ende)
+          nullable: true
+        nameDe:
+          maxLength: 255
+          type: string
+          description: deutscher Name
+        nameEn:
+          type: string
+          description: englischer Name
+          nullable: true
+        descriptionDe:
+          type: string
+          description: deutsche Beschreibung
+          nullable: true
+        descriptionEn:
+          type: string
+          description: englische Beschreibung
+          nullable: true
+        postalAddress:
+          maxLength: 255
+          type: string
+          description: Anschrift
+        locationStateId:
+          maximum: 16
+          minimum: 1
+          type: integer
+          description: Länderschlüssel
+          format: int64
+        dvdv1Id:
+          maxLength: 255
+          type: string
+          description: DVDV1-ID
+          nullable: true
+        category:
+          maxLength: 255
+          type: string
+          description: Name der Behördenkategorie
+        organizationKeys:
+          minLength: 1
+          type: array
+          description: Liste der Behördenschlüssel
+          items:
+            minLength: 1
+            type: string
+            description: Liste der Behördenschlüssel
+        clientCertificates:
+          type: array
+          description: Liste der Client-Zertifikate
+          items:
+            $ref: '#/components/schemas/Certificate'
+        services:
+          type: array
+          description: Liste der Dienste/Dienstbeschreibungen (ohne Dienstelemente)
+          items:
+            $ref: '#/components/schemas/ServiceBase'
+      description: Repräsentation einer Organisation im DVDV2-Umfeld.
+    OrganizationDescription:
+      type: object
+      properties:
+        organization:
+          $ref: '#/components/schemas/Organization'
+        representatives:
+          type: array
+          description: Beschreibungsobjekt der Behördenstellvertreter
+          items:
+            $ref: '#/components/schemas/Organization'
+      description: Beschreibung einer Organisation mit den zugehörigen Organisationsstellvertretern.
+      example:
+        organization:
+          id: 14077
+          validFrom: null
+          validTo: null
+          nameDe: Stadt Flensburg
+          nameEn: null
+          descriptionDe: null
+          descriptionEn: null
+          postalAddress: |-
+            Rathausplatz 1
+            24931 Flensburg
+          locationStateId: 1
+          dvdv1Id: '01001000_00'
+          category: Passbehörde
+          organizationKeys:
+            - 'psb:01001000_00'
+          clientCertificates:
+            - content: MIIFsTCCBJmgAwIBAgIHAgA5u04sFzANBgkqhkiG9w0BAQsFADBJMQswCQYDVQQGEwJERTEZMBcGA1UEChMQUEtJLTEtVmVyd2FsdHVuZzEMMAoGA1UECxMDRE9JMREwDwYDVQQDEwhET0kgQ0EgNzAeFw0xOTA1MTUwNjE0MjRaFw0yMjA1MTUyMzU5NTlaMIG2MQswCQYDVQQGEwJERTEgMB4GA1UEChMXT2VmZmVudGxpY2hlIFZlcndhbHR1bmcxETAPBgNVBAsTCERPSS1PU0NJMRIwEAYDVQQHEwlGbGVuc2J1cmcxLTArBgkqhkiG9w0BCQEWHmhpbGxlYnJhbmQub2xpdmVyQGZsZW5zYnVyZy5kZTEjMCEGA1UEAxMaR1JQOiBTdGFkdCBGbGVuc2J1cmcgWGhELVQxCjAIBgNVBAUTATEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCmBuHICVX/DBDjNCKHzEl3Df4rsH2fwrSGWajmiEw00GlhUGTu/617jmJZ51nW060os26PddajU5pPHokXucQig38HQk36fKufdcfiIRGe5kSXc3q7t1ZEROiO5XQU00nbV+eYWDwKpOhQKhvv2hajkaB8nbT+nY0uvrmeYqazs0RVdQlzJubKdsNwZznWttMPVN8dt2mJuslX5FSWvGtOIlIYnjmY6/H/waSdkE6RZPAoJa5ItvGihVYjQrW1lxiDpOdlydZTE9xJ7qnawKsuVT+zXartVBrkuRsnJhzL3sLgv7WmxeMFX66HBTe193liMv1GOj+sVhaWAg8FkCfRAgMBAAGjggIuMIICKjByBgNVHSMEazBpgBSwRRgvbktB9o1MLu0Cn8JuOtaZYaFKpEgwRjELMAkGA1UEBhMCREUxGTAXBgNVBAoTEFBLSS0xLVZlcndhbHR1bmcxHDAaBgNVBAMTE1BDQS0xLVZlcndhbHR1bmctMTeCBQD6QPkBMCkGA1UdEQQiMCCBHmhpbGxlYnJhbmQub2xpdmVyQGZsZW5zYnVyZy5kZTCCASEGA1UdHwSCARgwggEUMIIBEKCCAQygggEIhlxsZGFwOi8veDUwMC5idW5kLmRlL0NOPURPSSUyMENBJTIwNyxPVT1ET0ksTz1QS0ktMS1WZXJ3YWx0dW5nLEM9REU/Y2VydGlmaWNhdGVSZXZvY2F0aW9uTGlzdIZobGRhcDovL3BraS1kaXJlY3RvcnkuZG9pLWRlLm5ldC9DTj1ET0klMjBDQSUyMDcsT1U9RE9JLE89UEtJLTEtVmVyd2FsdHVuZyxDPURFP2NlcnRpZmljYXRlUmV2b2NhdGlvbkxpc3SGPmh0dHA6Ly94NTAwLmJ1bmQuZGUvY2dpLWJpbi9zaG93X2F0dHI/Y249RE9JJTIwQ0ElMjA3JmF0dHI9Y3JsMBYGA1UdIAQPMA0wCwYJKwYBBAG9dAEBMA4GA1UdDwEB/wQEAwIF4DA8BggrBgEFBQcBAQQwMC4wLAYIKwYBBQUHMAGGIGh0dHA6Ly9vY3NwLmRvaS50ZWxlc2VjLmRlL29jc3ByMA0GCSqGSIb3DQEBCwUAA4IBAQCD1gJtPUqa/RWgu+OMpeEoGlRt3F5GgbVdipYPyv+AFFynhY8Zn/2a+XQW11BMe+SwNx5D4NtjWxSfBHMZLRH0OKgV0IAalNKNl7bNKk8m0QKa0I5pI+7QmQ7Vj0138uhH1EAAEbfZVhr81+HnZBAUwng6gTytN2yvj1yOfInsJPpQhvTVjI2u9YRWF3Kz3pg/ZeSctdOPimLzSkWn2n1pQDlqIQeHV1RPQ/YUES2QC0tR2GMhPS7pmkfh/00liYa4uq4Fb3aa/0VwzUSbkdO2FO5KIbKvNSXqItmy7lrmfPEEyKBZHbSJKDblF3dzsW2eSFbKew3PvwUqu5uFo//B
+              fingerprint: ca6ecb1b53f73b948de54487f65c63aeb0cb16fc
+              serial: '563197909019671'
+              serialHex: 20039bb4e2c17
+              emailSubject: mustermann.erika@flensburg.de
+              algorithm: SHA256withRSA
+              nameIssuer: DOI CA 7
+              nameSubject: 'GRP: Stadt Flensburg XhD-T'
+              organizationIssuer: PKI-1-Verwaltung
+              organizationSubject: Oeffentliche Verwaltung
+              ouIssuer: DOI
+              ouSubject: DOI-OSCI
+              validFrom: '2019-05-15T06:14:24.000Z'
+              validTo: '2022-05-15T23:59:59.000Z'
+              x509KeyUsage: 7
+              revocationDate: null
+          services:
+            - id: 60913
+              validFrom: '2014-10-31T23:00:00.000Z'
+              validTo: '2019-12-01T22:59:59.000Z'
+              nameDe: xhd14Dh2BehServiceOsci
+              nameEn: null
+              descriptionDe: null
+              descriptionEn: null
+              dvdv1Uuid: 1CC1DE04-5BB0-ac18-1451-487e7c0622fa
+              serviceDescriptionName: xhd14Dh2BehServiceOsci
+              serviceSpecificationType: WSDL_OSCI
+              serviceSpecificationUri: 'http://www.bsi.de/trxhd/1.4/wsdl/xhd14Dh2BehServiceOsci.wsdl'
+            - id: 60914
+              validFrom: '2019-10-31T23:00:00.000Z'
+              validTo: null
+              nameDe: xhd15Dh2BehServiceOsci
+              nameEn: null
+              descriptionDe: null
+              descriptionEn: null
+              dvdv1Uuid: 1CC1DE04-5BB0-ac18-1451-6c1f183104b9
+              serviceDescriptionName: xhd15Dh2BehServiceOsci
+              serviceSpecificationType: WSDL_OSCI
+              serviceSpecificationUri: 'http://www.bsi.de/trxhd/1.5/wsdl/xhd15Dh2BehServiceOsci.wsdl'
+        representatives: []
+    ServiceBase:
+      required:
+        - id
+        - serviceDescriptionName
+        - serviceSpecificationType
+        - serviceSpecificationUri
+      type: object
+      properties:
+        id:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische Datenbank-ID
+          format: int64
+        validFrom:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Start)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+          nullable: true
+        validTo:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Ende)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+          nullable: true
+        nameDe:
+          maxLength: 255
+          type: string
+          description: deutscher Name
+        nameEn:
+          maxLength: 255
+          type: string
+          description: englischer Name
+          nullable: true
+        descriptionDe:
+          maxLength: 255
+          type: string
+          description: deutsche Beschreibung
+          nullable: true
+        descriptionEn:
+          maxLength: 255
+          type: string
+          description: englische Beschreibung
+          nullable: true
+        dvdv1Uuid:
+          maxLength: 255
+          type: string
+          description: DVDV1-UUID
+        serviceDescriptionName:
+          maxLength: 255
+          type: string
+          description: Name der zugehörigen Dienstbeschreibung
+        serviceSpecificationType:
+          type: string
+          description: Dienstbeschreibungs-Typ
+          enum:
+            - WSDL_OSCI
+            - MANUAL
+        serviceSpecificationUri:
+          maxLength: 1000
+          type: string
+          description: Dienstbeschreibungs-URI
+      description: 'Basisbeschreibung eines Dienstes im DVDV2-Umfeld, mit Kompatibilität zu DVDV1.'
+    Service:
+      required:
+        - id
+        - serviceDescriptionName
+        - serviceSpecificationDocument
+        - serviceSpecificationType
+        - serviceSpecificationUri
+      type: object
+      properties:
+        id:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische Datenbank-ID
+          format: int64
+        validFrom:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Start)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+          nullable: true
+        validTo:
+          maxLength: 27
+          minLength: 24
+          type: string
+          description: Gültigkeitszeitraum (Ende)
+          format: 'Datum (im Format ISO-8601, d.h.yyyy-MM-dd''T''HH:mm:ss.SSS''Z'')'
+          nullable: true
+        nameDe:
+          maxLength: 255
+          type: string
+          description: deutscher Name
+        nameEn:
+          maxLength: 255
+          type: string
+          description: englischer Name
+          nullable: true
+        descriptionDe:
+          maxLength: 255
+          type: string
+          description: deutsche Beschreibung
+          nullable: true
+        descriptionEn:
+          maxLength: 255
+          type: string
+          description: englische Beschreibung
+          nullable: true
+        dvdv1Uuid:
+          maxLength: 255
+          type: string
+          description: DVDV1-UUID
+        serviceDescriptionName:
+          maxLength: 255
+          type: string
+          description: Name der zugehörigen Dienstbeschreibung
+        serviceSpecificationType:
+          type: string
+          description: Dienstbeschreibungs-Typ
+          enum:
+            - WSDL_OSCI
+            - MANUAL
+        serviceSpecificationUri:
+          maxLength: 1000
+          type: string
+          description: Dienstbeschreibungs-URI
+        serviceSpecificationDocument:
+          maxLength: 65535
+          type: string
+          description: Dienstbeschreibung als WSDL
+        organizationNameDe:
+          maxLength: 255
+          type: string
+          description: deutscher Name der zugeordneten Organisation
+        organizationNameEn:
+          maxLength: 255
+          type: string
+          description: englischer Name der zugeordneten Organisation
+          nullable: true
+        locationStateId:
+          maximum: 16
+          minimum: 1
+          type: integer
+          description: Länderschlüssel
+          format: int64
+        serviceElements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceElementInfo'
+      description: Dienst im DVDV2-Umfeld.
+    ServiceElementInfo:
+      required:
+        - providerId
+        - serviceElementId
+      type: object
+      properties:
+        serviceElementName:
+          maxLength: 255
+          type: string
+          description: Name des Dienstelements
+        serviceElementDescription:
+          maxLength: 255
+          type: string
+          description: Beschreibung des Dienstelements
+        serviceElementDescriptionName:
+          maxLength: 255
+          type: string
+          description: Name der zugehörigen Dienstelementbeschreibung
+        serviceElementType:
+          type: string
+          description: Typ der zugehörigen Dienstelementbeschreibung
+          enum:
+            - OSCI_INTERMEDIARY
+            - OSCI_ADDRESSEE
+            - CIPHER_CERTIFICATE
+            - SIGNATURE_CERTIFICATE
+            - WEBSERVER
+            - TEXT
+        customServiceElementType:
+          type: string
+          description: Erweiterter Typ der zugehörigen Dienstelementbeschreibung (installationsspezifisch anpassbar
+        serviceElementText:
+          maxLength: 255
+          type: string
+          description: Beschreibungstext des Dienstelements
+        serviceElementUri:
+          maxLength: 1000
+          type: string
+          description: URI des Dienstelements
+        cipherCertificate:
+          $ref: '#/components/schemas/Certificate'
+        signatureCertificate:
+          $ref: '#/components/schemas/Certificate'
+        required:
+          type: boolean
+          description: 'Flag, ob das Dienstelement erforderlich ist'
+        serviceElementId:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische ID des Dienstelements
+          format: int64
+        providerId:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische ID des Providers
+          format: int64
+        providerNameDe:
+          maxLength: 255
+          type: string
+          description: Deutsche Bezeichnung des Providers
+        providerNameEn:
+          maxLength: 255
+          type: string
+          description: Englische Bezeichnung des Providers
+          nullable: true
+      description: Information über ein Dienstelement.
+    VerificationResult:
+      required:
+        - verifyCategory
+      type: object
+      properties:
+        verifyCategory:
+          type: boolean
+      description: Ergebnis einer Kategorienüberprüfung
+    DirectoryOrganizationCategoryLevel1DTO:
+      required:
+        - name
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name der Organisationskategorie (eindeutig über alle 4 Stufen)
+        children:
+          type: array
+          description: Kind-Kategorien
+          items:
+            $ref: '#/components/schemas/DirectoryOrganizationCategoryLevel2DTO'
+    DirectoryOrganizationCategoryLevel2DTO:
+      required:
+        - name
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name der Organisationskategorie (eindeutig über alle 4 Stufen)
+        prefix:
+          type: string
+          description: 'optionales Kategorienpräfix für Schlüsselvergabe, z.B. ''ubb'' für ''Untere Bauaufsichtsbehörde'''
+        children:
+          type: array
+          description: Kind-Kategorien
+          items:
+            $ref: '#/components/schemas/DirectoryOrganizationCategoryLevel3DTO'
+      description: Kind-Kategorien
+    DirectoryOrganizationCategoryLevel3DTO:
+      required:
+        - name
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name der Organisationskategorie (eindeutig über alle 4 Stufen)
+        prefix:
+          type: string
+          description: 'optionales Kategorienpräfix für Schlüsselvergabe, z.B. ''ubb'' für ''Untere Bauaufsichtsbehörde'''
+        children:
+          type: array
+          description: Kind-Kategorien
+          items:
+            $ref: '#/components/schemas/DirectoryOrganizationCategoryLevel4DTO'
+      description: Kind-Kategorien
+    DirectoryOrganizationCategoryLevel4DTO:
+      required:
+        - name
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name der Organisationskategorie (eindeutig über alle 4 Stufen)
+        prefix:
+          type: string
+          description: 'optionales Kategorienpräfix für Schlüsselvergabe, z.B. ''ubb'' für ''Untere Bauaufsichtsbehörde'''
+      description: Kind-Kategorien
+    SummaryServiceElementDTO:
+      required:
+        - id
+      type: object
+      properties:
+        id:
+          maximum: 9223372036854776000
+          minimum: 0
+          type: integer
+          description: Technische Datenbank-ID
+          format: int64
+        orgaProvId:
+          type: integer
+          format: int64
+        provider:
+          type: boolean
+        orgaProvName:
+          type: string
+        orgaProvAddress:
+          type: string
+        selName:
+          type: string
+        selDescription:
+          type: string
+        uri:
+          type: string
