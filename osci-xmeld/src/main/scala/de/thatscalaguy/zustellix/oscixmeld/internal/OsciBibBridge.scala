@@ -6,6 +6,7 @@ import de.thatscalaguy.zustellix.oscixmeld.{OSCIXMeldConfig, OSCIXMeldError}
 
 import de.osci.osci12.OSCIException
 import de.osci.osci12.common.DialogHandler
+import de.osci.osci12.extinterfaces.TransportI
 import de.osci.osci12.extinterfaces.crypto.{Decrypter, Signer}
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI}
 import de.osci.osci12.messagetypes.{
@@ -78,15 +79,17 @@ private[oscixmeld] object OsciBibBridge {
   }
 }
 
-private[oscixmeld] final class OsciBibBridgeImpl[F[_]: Sync](originator: Originator)
-    extends OsciTransport[F] {
+private[oscixmeld] final class OsciBibBridgeImpl[F[_]: Sync](
+    originator: Originator,
+    transport: TransportI = new HttpTransport()
+) extends OsciTransport[F] {
 
   def transmit(route: XmeldRoute, xml: String): F[OsciRawResult] =
     Sync[F].blocking {
       try {
         val addressee = new Addressee(route.addresseeSig.orNull, route.addresseeCipher)
         val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
-        val dialog    = new DialogHandler(originator, intermed, new HttpTransport())
+        val dialog    = new DialogHandler(originator, intermed, transport)
 
         val msgIdResp = new GetMessageId(dialog).send()
         checkFeedback(msgIdResp.getFeedback)
@@ -134,7 +137,7 @@ private[oscixmeld] final class OsciBibBridgeImpl[F[_]: Sync](originator: Origina
       }
     }
 
-  private def checkFeedback(fb: Array[Array[String]]): Unit =
+  private[internal] def checkFeedback(fb: Array[Array[String]]): Unit =
     Option(fb).filter(_.nonEmpty).map(_(0)) match {
       case Some(row) if row.length >= 2 && row(1) != null && !row(1).startsWith("0") =>
         val detail = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
@@ -142,7 +145,7 @@ private[oscixmeld] final class OsciBibBridgeImpl[F[_]: Sync](originator: Origina
       case _ => ()
     }
 
-  private def topFeedbackCode(fb: Array[Array[String]]): String =
+  private[internal] def topFeedbackCode(fb: Array[Array[String]]): String =
     Option(fb).filter(_.nonEmpty).flatMap(_.headOption).flatMap { r =>
       if r.length >= 2 then Option(r(1)) else None
     }.getOrElse("")
@@ -162,7 +165,7 @@ private[oscixmeld] final class OsciBibBridgeImpl[F[_]: Sync](originator: Origina
     }.getOrElse("")
   }
 
-  private def firstContentData(ccs: List[ContentContainer]): Option[String] =
+  private[internal] def firstContentData(ccs: List[ContentContainer]): Option[String] =
     ccs.iterator
       .flatMap(cc => Option(cc.getContents).map(_.toList).getOrElse(Nil))
       .map(_.getContentData)
