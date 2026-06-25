@@ -1,8 +1,11 @@
+ThisBuild / tlBaseVersion := "0.1"
 ThisBuild / scalaVersion := "3.3.6"
 ThisBuild / organization := "de.thatscalaguy"
-ThisBuild / version := "0.1.0-SNAPSHOT"
-ThisBuild / licenses := Seq(
-  "Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0")
+ThisBuild / organizationName := "ThatScalaGuy"
+ThisBuild / startYear := Some(2026)
+ThisBuild / licenses := Seq(License.Apache2)
+ThisBuild / developers ++= List(
+  tlGitHubDev("ThatScalaGuy", "Sven Herrmann")
 )
 
 val CatsEffectV = "3.6.1"
@@ -25,10 +28,10 @@ ThisBuild / scalacOptions ++= Seq(
 )
 
 lazy val root = (project in file("."))
+  .enablePlugins(NoPublishPlugin)
   .aggregate(utils, dvdv, osciXmeld)
   .settings(
-    name := "zustellix",
-    publish / skip := true
+    name := "zustellix"
   )
 
 lazy val utils = (project in file("utils"))
