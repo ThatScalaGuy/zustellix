@@ -13,6 +13,7 @@ final case class DvdvConfig(
     jwtLifetime: FiniteDuration = 60.seconds,
     tokenRefreshSkew: FiniteDuration = 30.seconds,
     requestTimeout: FiniteDuration = 30.seconds,
+    ignoreRevocation: Boolean = false,
     cacheConfig: CacheConfig = CacheConfig()
 ) {
   val entryPath: String = "extern/standaloneauth/directory"

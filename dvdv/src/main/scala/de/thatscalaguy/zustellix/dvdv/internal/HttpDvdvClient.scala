@@ -1,6 +1,8 @@
 package de.thatscalaguy.zustellix.dvdv.internal
 
 import cats.effect.Concurrent
+import cats.syntax.flatMap.*
+import cats.syntax.foldable.*
 import de.thatscalaguy.zustellix.dvdv.{DvdvClient, DvdvConfig}
 import de.thatscalaguy.zustellix.dvdv.model.*
 import io.circe.syntax.*
@@ -56,6 +58,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
       jsonObject("fingerPrint" -> fingerPrint))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.optional[F, Certificate](_))
+      .flatTap(_.traverse_(Revocation.check[F](_, config.ignoreRevocation)))
   }
 
   def findOrganizationsByServiceElement(
