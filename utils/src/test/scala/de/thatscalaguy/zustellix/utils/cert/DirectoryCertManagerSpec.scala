@@ -14,25 +14,11 @@ import scala.concurrent.duration.*
 
 /** Security-critical coverage for [[DirectoryCertManager]].
  *
- *  IMPORTANT — PRODUCTION DEFECT FOUND (out of this task's edit scope):
- *  `DirectoryCertManager.pollLoop` (DirectoryCertManager.scala:55-60) builds its
- *  background poll with a recursive `def loop = sleep *> scan.handleErrorWith(..) *> loop`.
- *  `*>` (cats `Apply.productR`) is STRICT in its second argument, and for a
- *  generic `F[_]: Async` there is no `Defer`/by-name suspension, so evaluating
- *  `loop` recurses at VALUE-CONSTRUCTION time and throws `StackOverflowError`
- *  the instant `DirectoryCertManager.resource[F](cfg)` is constructed — before
- *  `.use` ever runs. Because `StackOverflowError` is an `Error` (not `NonFatal`),
- *  cats-effect does not trap it; in a forked test JVM it kills the whole run.
- *  The one-line fix is to make the recursion lazy (`>> loop`, `Async[F].defer(loop)`,
- *  or `Monad[F].foreverM`), but DirectoryCertManager.scala is explicitly NOT in
- *  this task's ownership, so it is left untouched and the four resource-level
- *  behaviours below are `.ignore`d (they activate verbatim once the bug is fixed).
- *
- *  What DOES run here: faithful coverage of the per-entry collaborators the
- *  manager delegates to (in-JVM PKCS12 minting -> `CertLoader.loadPkcs12Bytes`,
- *  garbage rejection, and the `InMemoryCertManager` swap/resolve semantics the
- *  manager swaps its map through). These exercise the cert-handling logic on the
- *  path without tripping the broken poll loop.
+ *  Covers both the per-entry cert collaborators the manager delegates to (in-JVM
+ *  PKCS12 minting -> `CertLoader.loadPkcs12Bytes`, garbage rejection, and the
+ *  `InMemoryCertManager` swap/resolve semantics) and the four resource-level
+ *  behaviours: first-scan readiness, corrupt-file skip, hot reload, and poll-loop
+ *  survival of a transient bad scan.
  */
 class DirectoryCertManagerSpec extends CatsEffectSuite {
 
@@ -125,14 +111,11 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
   }
 
   // ---------------------------------------------------------------------------
-  // BLOCKED on the production defect above: these are the four resource-level
-  // behaviours the brief asks for. They are written verbatim and `.ignore`d so
-  // they pass as soon as `DirectoryCertManager.pollLoop` suspends its recursion.
-  // Running any of them today crashes the forked JVM with StackOverflowError at
-  // `DirectoryCertManager.resource[IO](...)` construction.
+  // Resource-level behaviours: first-scan readiness, corrupt-file skip, hot
+  // reload, and poll-loop survival of a transient bad scan.
   // ---------------------------------------------------------------------------
 
-  test("resolve succeeds immediately after the Resource is ready (first scan completed)".ignore) {
+  test("resolve succeeds immediately after the Resource is ready (first scan completed)") {
     for {
       dir <- tempDir
       _   <- IO.blocking {
@@ -153,7 +136,7 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
-  test("a corrupt .p12 is skipped while the other aliases still resolve".ignore) {
+  test("a corrupt .p12 is skipped while the other aliases still resolve") {
     for {
       dir <- tempDir
       _   <- IO.blocking {
@@ -176,7 +159,7 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
-  test("hot reload: a new alias appears and a rotated credential changes after one interval".ignore) {
+  test("hot reload: a new alias appears and a rotated credential changes after one interval") {
     val interval = 150.millis
     for {
       dir <- tempDir
@@ -209,7 +192,7 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
-  test("a transient bad scan does not kill the poll loop; a later good scan still updates".ignore) {
+  test("a transient bad scan does not kill the poll loop; a later good scan still updates") {
     val interval = 150.millis
     val pwds     = (d: Path) => d.resolve("passwords.properties")
     for {

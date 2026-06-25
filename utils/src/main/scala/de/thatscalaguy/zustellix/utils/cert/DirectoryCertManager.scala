@@ -56,7 +56,7 @@ object DirectoryCertManager {
       Async[F].sleep(cfg.interval) *>
         scanOnce[F](cfg, mgr).handleErrorWith { e =>
           log.warn(e)("cert directory scan failed; keeping previous certificates")
-        } *> loop
+        } >> loop
     loop
   }
 
