@@ -53,11 +53,11 @@ osci-xmeld ──▶ dvdv ──▶ utils
 
 ```scala
 // build.sbt — pick the module you need (transitive deps are pulled in)
-libraryDependencies += "de.thatscalaguy" %% "osci-xmeld" % "0.1.0-SNAPSHOT"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-osci-xmeld" % "0.1.1"
 // or just the directory client:
-libraryDependencies += "de.thatscalaguy" %% "dvdv"       % "0.1.0-SNAPSHOT"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"       % "0.1.1"
 // or only the cert utilities:
-libraryDependencies += "de.thatscalaguy" %% "utils"      % "0.1.0-SNAPSHOT"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-utils"      % "0.1.1"
 ```
 
 Built against:

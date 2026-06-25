@@ -38,7 +38,8 @@ lazy val root = (project in file("."))
 
 lazy val utils = (project in file("utils"))
   .settings(
-    name := "utils",
+    name := "zustellix-utils",
+    tlVersionIntroduced := Map("3" -> "0.1.1"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "org.bouncycastle" % "bcprov-jdk18on" % BouncyV,
@@ -54,7 +55,8 @@ lazy val utils = (project in file("utils"))
 lazy val dvdv = (project in file("dvdv"))
   .dependsOn(utils)
   .settings(
-    name := "dvdv",
+    name := "zustellix-dvdv",
+    tlVersionIntroduced := Map("3" -> "0.1.1"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "org.http4s" %% "http4s-core" % Http4sV,
@@ -79,7 +81,8 @@ lazy val dvdv = (project in file("dvdv"))
 lazy val osciXmeld = (project in file("osci-xmeld"))
   .dependsOn(dvdv, utils)
   .settings(
-    name := "osci-xmeld",
+    name := "zustellix-osci-xmeld",
+    tlVersionIntroduced := Map("3" -> "0.1.1"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "de.osci" % "osci-bibliothek" % OsciBibV,
