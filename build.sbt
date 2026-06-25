@@ -27,6 +27,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-Xfatal-warnings"
 )
 
+ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("21"))
+
 lazy val root = (project in file("."))
   .enablePlugins(NoPublishPlugin)
   .aggregate(utils, dvdv, osciXmeld)
