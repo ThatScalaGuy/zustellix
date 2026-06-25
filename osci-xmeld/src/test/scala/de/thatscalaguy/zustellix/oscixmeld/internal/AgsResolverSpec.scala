@@ -18,13 +18,14 @@ class AgsResolverSpec extends CatsEffectSuite {
     certSource = CertSource.Pkcs12(Paths.get("k.p12"), "pw")
   )
 
-  // Self-signed test cert (RSA-1024, valid for one day). Generated lazily once per JVM.
-  private lazy val testCertB64: String = {
+  // Self-signed test cert (RSA-1024, valid for one day). `cn` makes each cert distinct
+  // so tests can assert *which* key the resolver picked.
+  private def mintCertB64(cn: String): String = {
     java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
     val kpg   = java.security.KeyPairGenerator.getInstance("RSA")
     kpg.initialize(1024)
     val kp    = kpg.generateKeyPair()
-    val name  = new javax.security.auth.x500.X500Principal("CN=Test")
+    val name  = new javax.security.auth.x500.X500Principal(s"CN=$cn")
     val now   = new java.util.Date()
     val later = new java.util.Date(now.getTime + 86400000L)
     val builder = new org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder(
@@ -35,6 +36,13 @@ class AgsResolverSpec extends CatsEffectSuite {
     val cert   = new org.bouncycastle.cert.jcajce.JcaX509CertificateConverter().getCertificate(holder)
     Base64.getEncoder.encodeToString(cert.getEncoded)
   }
+
+  // Two distinct certs, generated lazily once per JVM.
+  private lazy val testCertB64: String  = mintCertB64("Test")
+  private lazy val otherCertB64: String = mintCertB64("Other")
+
+  // The expected DER bytes of a base64 cert, for `sameElements` identity checks.
+  private def certBytes(b64: String): Array[Byte] = Base64.getDecoder.decode(b64)
 
   private def stubDvdv(handler: (String, String) => IO[Option[Service]]): DvdvClient[IO] =
     new DvdvClient[IO] {
@@ -63,14 +71,16 @@ class AgsResolverSpec extends CatsEffectSuite {
   private def element(
       kind:      ServiceElementType,
       uri:       String,
-      cipherB64: Option[String]
+      cipherB64: Option[String],
+      name:      Option[String] = None
   ): ServiceElementInfo =
     ServiceElementInfo(
-      serviceElementType = Some(kind),
-      serviceElementUri  = Some(uri),
-      cipherCertificate  = cipherB64.map(b => Certificate(content = Some(b))),
-      serviceElementId   = Some(7L),
-      providerId         = Some(9L)
+      serviceElementType            = Some(kind),
+      serviceElementUri             = Some(uri),
+      cipherCertificate             = cipherB64.map(b => Certificate(content = Some(b))),
+      serviceElementDescriptionName = name,
+      serviceElementId              = Some(7L),
+      providerId                    = Some(9L)
     )
 
   private def serviceWithElements(elems: List[ServiceElementInfo]): Service =
@@ -123,6 +133,43 @@ class AgsResolverSpec extends CatsEffectSuite {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
       element(ServiceElementType.OSCI_ADDRESSEE,    "https://recipient/osci", None),
       element(ServiceElementType.OSCI_INTERMEDIARY, "https://intermed/osci",  Some(testCertB64))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve("01001000").attempt.map {
+      case Left(e: OSCIXMeldError.RecipientCertMissing) =>
+        assert(e.ags.startsWith("01001000"))
+      case other => fail(s"unexpected: $other")
+    }
+  }
+
+  test("addressee inline cipher wins over a foreign standalone CIPHER_CERTIFICATE element") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", Some(testCertB64),  name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve("01001000").map { route =>
+      assert(route.addresseeCipher.getEncoded.sameElements(certBytes(testCertB64)),
+             "addressee cipher must be the inline cert, not the foreign standalone one")
+    }
+  }
+
+  test("addressee falls back to a standalone CIPHER_CERTIFICATE with a matching name") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", None,               name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, "https://addr/cipher",    Some(otherCertB64), name = Some("addr"))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve("01001000").map { route =>
+      assert(route.addresseeCipher.getEncoded.sameElements(certBytes(otherCertB64)),
+             "addressee cipher must be the matching standalone cert")
+    }
+  }
+
+  test("addressee raises RecipientCertMissing when the only standalone cipher has a non-matching name") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", None,               name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve("01001000").attempt.map {
       case Left(e: OSCIXMeldError.RecipientCertMissing) =>

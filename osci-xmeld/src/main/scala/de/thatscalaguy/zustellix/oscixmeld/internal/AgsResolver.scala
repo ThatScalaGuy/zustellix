@@ -37,18 +37,26 @@ object AgsResolver {
             case None    => Sync[F].raiseError(OSCIXMeldError.ServiceElementMissing(ags, t.toString))
           }
 
-        // The addressee's content-encryption cert is published as a dedicated
-        // CIPHER_CERTIFICATE service element when present; the cipher cert on
-        // the OSCI_ADDRESSEE element is the fallback.
-        val cipherElem: Option[ServiceElementInfo] =
-          elems.find(_.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE))
+        // The addressee's content-encryption cert is the inline cipher cert on
+        // the OSCI_ADDRESSEE element; if absent, a standalone CIPHER_CERTIFICATE
+        // element carrying the *same* serviceElementDescriptionName is the
+        // fallback (matched by name+type, never "first of type").
+        def addresseeCipherCert(addr: ServiceElementInfo): Option[DvdvCert] =
+          addr.cipherCertificate.orElse(
+            elems
+              .find(e =>
+                e.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE) &&
+                  e.serviceElementDescriptionName == addr.serviceElementDescriptionName
+              )
+              .flatMap(_.cipherCertificate)
+          )
 
         for {
           addr       <- find(ServiceElementType.OSCI_ADDRESSEE)
           intm       <- find(ServiceElementType.OSCI_INTERMEDIARY)
           addrUri    <- parseUri(addr.serviceElementUri.getOrElse(""))
           intUri     <- parseUri(intm.serviceElementUri.getOrElse(""))
-          addrCipher <- requireCipher(ags, "OSCI_ADDRESSEE", cipherElem.getOrElse(addr))
+          addrCipher <- requireCipherCert(ags, "OSCI_ADDRESSEE", addresseeCipherCert(addr))
           intCipher  <- requireCipher(ags, "OSCI_INTERMEDIARY", intm)
           addrSig    <- addr.signatureCertificate.traverse(c =>
                           decodeCert(c).adaptError(t => OSCIXMeldError.Certificate(t))
@@ -58,11 +66,14 @@ object AgsResolver {
       }
 
       private def requireCipher(ags: String, kind: String, e: ServiceElementInfo): F[X509Certificate] =
-        e.cipherCertificate match {
-          case Some(c) => decodeCert(c).adaptError(t => OSCIXMeldError.Certificate(t))
-          case None    => Sync[F].raiseError[X509Certificate](
-                            OSCIXMeldError.RecipientCertMissing(s"$ags ($kind)")
-                          )
+        requireCipherCert(ags, kind, e.cipherCertificate)
+
+      private def requireCipherCert(ags: String, kind: String, c: Option[DvdvCert]): F[X509Certificate] =
+        c match {
+          case Some(cert) => decodeCert(cert).adaptError(t => OSCIXMeldError.Certificate(t))
+          case None       => Sync[F].raiseError[X509Certificate](
+                               OSCIXMeldError.RecipientCertMissing(s"$ags ($kind)")
+                             )
         }
 
       private def parseUri(s: String): F[URI] =
