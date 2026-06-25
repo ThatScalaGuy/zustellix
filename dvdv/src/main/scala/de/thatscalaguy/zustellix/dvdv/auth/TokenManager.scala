@@ -95,7 +95,10 @@ object TokenManager {
                        }
                      case other =>
                        resp.bodyText.compile.string.flatMap { body =>
-                         Async[F].raiseError[AccessTokenResponse](DvdvError.Unexpected(other.code, body))
+                         val err =
+                           if (other.code >= 500) DvdvError.ServerError(other.code, body)
+                           else DvdvError.Unexpected(other.code, body)
+                         Async[F].raiseError[AccessTokenResponse](err)
                        }
                    }
                  }

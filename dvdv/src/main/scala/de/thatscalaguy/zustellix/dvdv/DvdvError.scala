@@ -18,6 +18,9 @@ object DvdvError {
   final case class Unexpected(status: Int, body: String)
       extends DvdvError(s"Unexpected $status: $body")
 
+  final case class ServerError(status: Int, body: String)
+      extends DvdvError(s"Server error $status: $body")
+
   final case class CertificateRevoked(date: Option[String], reason: Option[RevocationReason])
       extends DvdvError(s"Certificate revoked${date.fold("")(d => s" since $d")}${reason.fold("")(r => s": $r")}")
 

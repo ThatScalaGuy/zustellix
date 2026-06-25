@@ -3,7 +3,7 @@ package de.thatscalaguy.zustellix.dvdv
 import cats.effect.{Async, Resource}
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
-import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, HttpDvdvClient}
+import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
 import de.thatscalaguy.zustellix.dvdv.model.*
 import fs2.io.net.Network
 import org.http4s.ember.client.EmberClientBuilder
@@ -95,8 +95,9 @@ object DvdvClient {
       loaded: LoadedCert
   ): Resource[F, DvdvClient[F]] =
     for {
-      tokenMgr <- Resource.eval(TokenManager.make[F](http, config, loaded))
-      authed    = AuthMiddleware(tokenMgr)(http)
+      failover <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter)).map(_(http))
+      tokenMgr <- Resource.eval(TokenManager.make[F](failover, config, loaded))
+      authed    = AuthMiddleware(tokenMgr)(failover)
       raw       = HttpDvdvClient[F](authed, config)
       cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
     } yield cached

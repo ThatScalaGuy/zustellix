@@ -49,10 +49,11 @@ object ResponseDecoder {
           decode[Problem](body).toOption.getOrElse(Problem(detail = Some(body)))
       }
       val err: DvdvError = resp.status match {
-        case Status.BadRequest   => DvdvError.ValidationError(problem)
-        case Status.Unauthorized => DvdvError.AuthenticationError(problem)
-        case Status.NotFound     => DvdvError.NotFound(problem)
-        case s                   => DvdvError.Unexpected(s.code, body)
+        case Status.BadRequest      => DvdvError.ValidationError(problem)
+        case Status.Unauthorized    => DvdvError.AuthenticationError(problem)
+        case Status.NotFound        => DvdvError.NotFound(problem)
+        case s if s.code >= 500     => DvdvError.ServerError(s.code, body)
+        case s                      => DvdvError.Unexpected(s.code, body)
       }
       Concurrent[F].raiseError[A](err)
     }
