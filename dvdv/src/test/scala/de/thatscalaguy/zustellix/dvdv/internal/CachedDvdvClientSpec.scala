@@ -20,18 +20,15 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     def findCategories(fp: String, k: String) = bump(List.empty[String])
     def findCertificateByFingerprint(fp: String) = bump(Option.empty[Certificate])
     def findOrganizationsByServiceElement(s: ServiceElementType, p: ParameterType, v: String) =
-      bump(OrganizationDescription())
+      bump(List.empty[LightweightOrganization])
     def findServiceDescription(k: String, u: String) = bump(Option.empty[Service])
-    def findServiceSpecificationUrisByCategory(c: String) = bump(List.empty[ServiceBase])
+    def findServiceSpecificationUrisByCategory(c: String) = bump(List.empty[String])
     def verifyCategory(fp: String, c: String) = bump(VerificationResult(true))
-    def batchFindAuthorityDescription(r: List[Request]) = bump(OrganizationDescription())
+    def batchFindAuthorityDescription(r: List[Request]) = bump(List.empty[OrganizationDescription])
     def batchFindCategories(r: List[Request]) = bump(List.empty[List[String]])
-    def batchFindOrganizationsByServiceElement(r: List[Request]) = bump(OrganizationDescription())
-    def batchFindServiceDescription(r: List[Request]) =
-      bump(Service(id = 0, serviceDescriptionName = "x",
-        serviceSpecificationType = ServiceSpecificationType.WSDL_OSCI,
-        serviceSpecificationUri = "u", serviceSpecificationDocument = "d"))
-    def batchFindServiceSpecificationUrisByCategory(r: List[Request]) = bump(Request())
+    def batchFindOrganizationsByServiceElement(r: List[Request]) = bump(List.empty[List[LightweightOrganization]])
+    def batchFindServiceDescription(r: List[Request]) = bump(List.empty[Service])
+    def batchFindServiceSpecificationUrisByCategory(r: List[Request]) = bump(List.empty[List[String]])
     def batchVerifyCategory(r: List[Request]) = bump(List.empty[VerificationResult])
   }
 

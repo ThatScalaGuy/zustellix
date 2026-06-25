@@ -32,7 +32,7 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findauthoritydescription" :? RequestJsonQ(json) =>
         if (json.contains("none")) NoContent()
         else Ok(OrganizationDescription(organization = Some(Organization(
-          id = 1, nameDe = "X", category = "Y", organizationKeys = List("k"))
+          id = Some(1L), nameDe = "X", category = Some("Y"), organizationKeys = List("k"))
         )).asJson)
     }
     val c = client(routes)
@@ -76,6 +76,63 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
     } yield {
       assertEquals(out.map(_.verifyCategory), List(true, false))
       assertEquals(seenIn, Some(input))
+    }
+  }
+
+  test("findServiceSpecificationUrisByCategory decodes a JSON string array") {
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findServiceSpecificationUrisByCategory" :? RequestJsonQ(_) =>
+        Ok(List("u1", "u2").asJson)
+    }
+    client(routes).findServiceSpecificationUrisByCategory("cat").map { r =>
+      assertEquals(r, List("u1", "u2"))
+    }
+  }
+
+  test("findOrganizationsByServiceElement decodes a JSON array of organizations") {
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findOrganizationsByServiceElement" :? RequestJsonQ(_) =>
+        Ok(List(LightweightOrganization(id = Some(1L))).asJson)
+    }
+    client(routes)
+      .findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "01001000")
+      .map(r => assertEquals(r.size, 1))
+  }
+
+  test("batchFindAuthorityDescription decodes a JSON array of OrganizationDescription") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findauthoritydescription" =>
+        Ok(List(OrganizationDescription(), OrganizationDescription()).asJson)
+    }
+    client(routes).batchFindAuthorityDescription(List(Request())).map(r => assertEquals(r.size, 2))
+  }
+
+  test("batchFindOrganizationsByServiceElement decodes an array of arrays of organizations") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findOrganizationsByServiceElement" =>
+        Ok(List(List(LightweightOrganization(id = Some(1L))), List.empty[LightweightOrganization]).asJson)
+    }
+    client(routes).batchFindOrganizationsByServiceElement(List(Request())).map { r =>
+      assertEquals(r.size, 2)
+      assertEquals(r.head.size, 1)
+    }
+  }
+
+  test("batchFindServiceDescription decodes a JSON array of Service") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findservicedescription" =>
+        Ok(List(Service(id = Some(1L))).asJson)
+    }
+    client(routes).batchFindServiceDescription(List(Request())).map(r => assertEquals(r.size, 1))
+  }
+
+  test("batchFindServiceSpecificationUrisByCategory decodes an array of arrays of strings") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findServiceSpecificationUrisByCategory" =>
+        Ok(List(List("a"), List("b", "c")).asJson)
+    }
+    client(routes).batchFindServiceSpecificationUrisByCategory(List(Request())).map { r =>
+      assertEquals(r, List(List("a"), List("b", "c")))
     }
   }
 

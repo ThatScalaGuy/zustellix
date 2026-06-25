@@ -1,0 +1,23 @@
+{"organization":
+{"id":null,
+  "validFrom":"2019-06-17T02:00:00.000Z",
+  "validTo":"2019-12-06T01:00:00.000Z",
+  "nameDe":"der-orga-name",
+  "nameEn":"the-orga-name",
+  "descriptionDe":"org-descr-de-0",
+  "descriptionEn":"org-descr-en-0",
+  "postalAddress":"Postalischer Weg",
+  "dvdv1Id":"the-orga-dvdv1id",
+  "category":null,
+  "organizationKeys":[],
+  "clientCertificates":[{
+    "content":"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",
+    "fingerprint":"Fingerabdruck0",
+    "serial":"test-serial0",
+    "emailSubject":"test-email-subject",
+    "algorithm":"test-algorithm0",
+    "nameIssuer":null,"nameSubject":null,"organizationIssuer":null,"organizationSubject":null,"ouIssuer":null,"ouSubject":null,"validFrom":"2017-06-17T02:00:00.000Z","validTo":"2017-12-06T01:00:00.000Z"}],
+  "services":[{"id":null,"validFrom":"1967-04-06T12:24:48.666Z","validTo":"1970-03-26T12:24:48.666Z",
+    "nameDe":"test-service-base0","nameEn":null,"descriptionDe":"test-descr-de","descriptionEn":"test-descr-en","dvdv1Uuid":"test-dvdv1-uid-0","serviceDescriptionName":"test-descr-name-0",
+    "serviceSpecificationType":null,"serviceSpecificationUri":"the-service-spec-uri"}]},"representatives":[{"id":null,"validFrom":"2018-06-17T02:00:00.000Z","validTo":"2018-12-06T01:00:00.000Z","nameDe":"the-repr-name",
+  "nameEn":null,"descriptionDe":null,"descriptionEn":null,"postalAddress":null,"dvdv1Id":"the-repr-dvdv1id","category":null,"organizationKeys":[],"clientCertificates":[],"services":[]}]}

@@ -4,7 +4,7 @@ import io.circe.Codec
 import io.circe.generic.semiauto.deriveCodec
 
 final case class ServiceBase(
-    id: Long,
+    id: Option[Long] = None,
     validFrom: Option[String] = None,
     validTo: Option[String] = None,
     nameDe: Option[String] = None,
@@ -12,9 +12,9 @@ final case class ServiceBase(
     descriptionDe: Option[String] = None,
     descriptionEn: Option[String] = None,
     dvdv1Uuid: Option[String] = None,
-    serviceDescriptionName: String,
-    serviceSpecificationType: ServiceSpecificationType,
-    serviceSpecificationUri: String
+    serviceDescriptionName: Option[String] = None,
+    serviceSpecificationType: Option[ServiceSpecificationType] = None,
+    serviceSpecificationUri: Option[String] = None
 )
 
 object ServiceBase {
@@ -32,7 +32,7 @@ final case class ServiceElementInfo(
     cipherCertificate: Option[Certificate] = None,
     signatureCertificate: Option[Certificate] = None,
     required: Option[Boolean] = None,
-    serviceElementId: Long,
+    serviceElementId: Option[Long] = None,
     providerId: Option[Long] = None,
     providerNameDe: Option[String] = None,
     providerNameEn: Option[String] = None
@@ -43,7 +43,7 @@ object ServiceElementInfo {
 }
 
 final case class Service(
-    id: Long,
+    id: Option[Long] = None,
     validFrom: Option[String] = None,
     validTo: Option[String] = None,
     nameDe: Option[String] = None,
@@ -51,10 +51,10 @@ final case class Service(
     descriptionDe: Option[String] = None,
     descriptionEn: Option[String] = None,
     dvdv1Uuid: Option[String] = None,
-    serviceDescriptionName: String,
-    serviceSpecificationType: ServiceSpecificationType,
-    serviceSpecificationUri: String,
-    serviceSpecificationDocument: String,
+    serviceDescriptionName: Option[String] = None,
+    serviceSpecificationType: Option[ServiceSpecificationType] = None,
+    serviceSpecificationUri: Option[String] = None,
+    serviceSpecificationDocument: Option[String] = None,
     organizationNameDe: Option[String] = None,
     organizationNameEn: Option[String] = None,
     locationStateId: Option[Long] = None,

@@ -33,17 +33,17 @@ trait DvdvClient[F[_]] {
       serviceElementType: ServiceElementType,
       parameterType: ParameterType,
       parameterValue: String
-  ): F[OrganizationDescription]
+  ): F[List[LightweightOrganization]]
   def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]]
-  def findServiceSpecificationUrisByCategory(category: String): F[List[ServiceBase]]
+  def findServiceSpecificationUrisByCategory(category: String): F[List[String]]
   def verifyCategory(fingerPrint: String, category: String): F[VerificationResult]
 
   // 6 batch POSTs
-  def batchFindAuthorityDescription(requests: List[Request]): F[OrganizationDescription]
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]
   def batchFindCategories(requests: List[Request]): F[List[List[String]]]
-  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[OrganizationDescription]
-  def batchFindServiceDescription(requests: List[Request]): F[Service]
-  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[Request]
+  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]]
+  def batchFindServiceDescription(requests: List[Request]): F[List[Service]]
+  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]]
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 }
 

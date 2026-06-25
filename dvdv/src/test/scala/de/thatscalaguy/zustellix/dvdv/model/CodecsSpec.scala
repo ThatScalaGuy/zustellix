@@ -4,7 +4,15 @@ import io.circe.parser.decode
 import io.circe.syntax.*
 import munit.FunSuite
 
+import scala.io.Source
+
 class CodecsSpec extends FunSuite {
+
+  private def fixture(name: String): String = {
+    val src = Source.fromInputStream(getClass.getResourceAsStream("/" + name), "UTF-8")
+    try src.mkString
+    finally src.close()
+  }
 
   test("Problem round-trips") {
     val p = Problem(
@@ -65,5 +73,39 @@ class CodecsSpec extends FunSuite {
     assert(r.isRight)
     assertEquals(r.toOption.get.access_token, "tok")
     assertEquals(r.toOption.get.expires_in, Some(86400L))
+  }
+
+  test("LightweightOrganization decodes the real fixture (category null)") {
+    val parsed = decode[LightweightOrganization](fixture("OrganizationLightweight.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val org = parsed.toOption.get
+    assertEquals(org.category, None)
+    assertEquals(org.id, Some(4711L))
+    assertEquals(org.organizationKeys, List("foo:1234", "bar:4321"))
+  }
+
+  test("Service decodes the real fixture (null spec type/uri and serviceElementId)") {
+    val parsed = decode[Service](fixture("ServiceDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val svc = parsed.toOption.get
+    assertEquals(svc.serviceSpecificationType, None)
+    assertEquals(svc.serviceSpecificationUri, None)
+    assertEquals(svc.serviceElements.get.head.serviceElementId, None)
+  }
+
+  test("Service decodes the custom fixture (null document, MANUAL spec type)") {
+    val parsed = decode[Service](fixture("ServiceDescription-mit-Custom.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val svc = parsed.toOption.get
+    assertEquals(svc.serviceSpecificationDocument, None)
+    assertEquals(svc.serviceSpecificationType, Some(ServiceSpecificationType.MANUAL))
+  }
+
+  test("OrganizationDescription decodes the real fixture (org id/category null)") {
+    val parsed = decode[OrganizationDescription](fixture("OrganizationDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val od = parsed.toOption.get
+    assertEquals(od.organization.flatMap(_.id), None)
+    assertEquals(od.organization.flatMap(_.category), None)
   }
 }

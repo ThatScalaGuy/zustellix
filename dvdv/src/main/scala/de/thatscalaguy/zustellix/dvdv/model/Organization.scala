@@ -4,7 +4,7 @@ import io.circe.Codec
 import io.circe.generic.semiauto.deriveCodec
 
 final case class Organization(
-    id: Long,
+    id: Option[Long] = None,
     validFrom: Option[String] = None,
     validTo: Option[String] = None,
     nameDe: String,
@@ -14,7 +14,7 @@ final case class Organization(
     postalAddress: Option[String] = None,
     locationStateId: Option[Long] = None,
     dvdv1Id: Option[String] = None,
-    category: String,
+    category: Option[String] = None,
     organizationKeys: List[String],
     clientCertificates: Option[List[Certificate]] = None,
     services: Option[List[ServiceBase]] = None
@@ -22,6 +22,25 @@ final case class Organization(
 
 object Organization {
   given Codec[Organization] = deriveCodec
+}
+
+final case class LightweightOrganization(
+    id: Option[Long] = None,
+    validFrom: Option[String] = None,
+    validTo: Option[String] = None,
+    nameDe: Option[String] = None,
+    nameEn: Option[String] = None,
+    descriptionDe: Option[String] = None,
+    descriptionEn: Option[String] = None,
+    postalAddress: Option[String] = None,
+    locationStateId: Option[Long] = None,
+    dvdv1Id: Option[String] = None,
+    category: Option[String] = None,
+    organizationKeys: List[String] = Nil
+)
+
+object LightweightOrganization {
+  given Codec[LightweightOrganization] = deriveCodec
 }
 
 final case class OrganizationDescription(

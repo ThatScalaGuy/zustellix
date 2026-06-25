@@ -1,0 +1,13 @@
+{
+  "id": 4711,
+  "validFrom": "2019-06-17T02:00:00.000Z",
+  "validTo": "2019-12-06T01:00:00.000Z",
+  "nameDe": "der-orga-name",
+  "nameEn": "the-orga-name",
+  "descriptionDe": "org-descr-de-0",
+  "descriptionEn": "org-descr-en-0",
+  "postalAddress": "Postalischer Weg",
+  "dvdv1Id": "the-orga-dvdv1id",
+  "category": null,
+  "organizationKeys": ["foo:1234", "bar:4321"]
+}

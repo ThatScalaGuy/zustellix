@@ -18,12 +18,12 @@ object CachedDvdvClient {
         categoriesC                          <- mkCache[F, Unit, List[DirectoryOrganizationCategoryLevel1DTO]](cfg.categoriesTtl)
         intermediariesC                      <- mkCache[F, Unit, List[SummaryServiceElementDTO]](cfg.intermediariesTtl)
         certByFpC                            <- mkCache[F, String, Option[Certificate]](cfg.findCertificateByFingerprintTtl)
-        urisByCategoryC                      <- mkCache[F, String, List[ServiceBase]](cfg.findServiceSpecificationUrisByCategoryTtl)
+        urisByCategoryC                      <- mkCache[F, String, List[String]](cfg.findServiceSpecificationUrisByCategoryTtl)
         authDescriptionC                     <- mkCache[F, (String, String), Option[OrganizationDescription]](cfg.findAuthorityDescriptionTtl)
         authDescriptionsC                    <- mkCache[F, String, List[OrganizationDescription]](cfg.findAuthorityDescriptionsTtl)
         categoriesByFpKeyC                   <- mkCache[F, (String, String), List[String]](cfg.findCategoriesTtl)
         serviceDescC                         <- mkCache[F, (String, String), Option[Service]](cfg.findServiceDescriptionTtl)
-        orgsByServiceElementC                <- mkCache[F, (ServiceElementType, ParameterType, String), OrganizationDescription](cfg.findOrganizationsByServiceElementTtl)
+        orgsByServiceElementC                <- mkCache[F, (ServiceElementType, ParameterType, String), List[LightweightOrganization]](cfg.findOrganizationsByServiceElementTtl)
         verifyCategoryC                      <- mkCache[F, (String, String), VerificationResult](cfg.verifyCategoryTtl)
       } yield new Impl[F](
         underlying,
@@ -46,12 +46,12 @@ object CachedDvdvClient {
       categoriesC:           MemoryCache[F, Unit, List[DirectoryOrganizationCategoryLevel1DTO]],
       intermediariesC:       MemoryCache[F, Unit, List[SummaryServiceElementDTO]],
       certByFpC:             MemoryCache[F, String, Option[Certificate]],
-      urisByCategoryC:       MemoryCache[F, String, List[ServiceBase]],
+      urisByCategoryC:       MemoryCache[F, String, List[String]],
       authDescriptionC:      MemoryCache[F, (String, String), Option[OrganizationDescription]],
       authDescriptionsC:     MemoryCache[F, String, List[OrganizationDescription]],
       categoriesByFpKeyC:    MemoryCache[F, (String, String), List[String]],
       serviceDescC:          MemoryCache[F, (String, String), Option[Service]],
-      orgsByServiceElementC: MemoryCache[F, (ServiceElementType, ParameterType, String), OrganizationDescription],
+      orgsByServiceElementC: MemoryCache[F, (ServiceElementType, ParameterType, String), List[LightweightOrganization]],
       verifyCategoryC:       MemoryCache[F, (String, String), VerificationResult]
   ) extends DvdvClient[F] {
 
@@ -88,7 +88,7 @@ object CachedDvdvClient {
         serviceElementType: ServiceElementType,
         parameterType: ParameterType,
         parameterValue: String
-    ): F[OrganizationDescription] =
+    ): F[List[LightweightOrganization]] =
       cached(orgsByServiceElementC, (serviceElementType, parameterType, parameterValue))(
         underlying.findOrganizationsByServiceElement(serviceElementType, parameterType, parameterValue)
       )
@@ -98,7 +98,7 @@ object CachedDvdvClient {
         underlying.findServiceDescription(organizationKey, serviceSpecificationUri)
       )
 
-    def findServiceSpecificationUrisByCategory(category: String): F[List[ServiceBase]] =
+    def findServiceSpecificationUrisByCategory(category: String): F[List[String]] =
       cached(urisByCategoryC, category)(
         underlying.findServiceSpecificationUrisByCategory(category)
       )
@@ -109,19 +109,19 @@ object CachedDvdvClient {
       )
 
     // Batch endpoints — not cached; delegate.
-    def batchFindAuthorityDescription(requests: List[Request]): F[OrganizationDescription] =
+    def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]] =
       underlying.batchFindAuthorityDescription(requests)
 
     def batchFindCategories(requests: List[Request]): F[List[List[String]]] =
       underlying.batchFindCategories(requests)
 
-    def batchFindOrganizationsByServiceElement(requests: List[Request]): F[OrganizationDescription] =
+    def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]] =
       underlying.batchFindOrganizationsByServiceElement(requests)
 
-    def batchFindServiceDescription(requests: List[Request]): F[Service] =
+    def batchFindServiceDescription(requests: List[Request]): F[List[Service]] =
       underlying.batchFindServiceDescription(requests)
 
-    def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[Request] =
+    def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]] =
       underlying.batchFindServiceSpecificationUrisByCategory(requests)
 
     def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]] =

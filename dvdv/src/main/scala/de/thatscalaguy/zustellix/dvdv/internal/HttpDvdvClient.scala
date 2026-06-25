@@ -62,7 +62,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
       serviceElementType: ServiceElementType,
       parameterType: ParameterType,
       parameterValue: String
-  ): F[OrganizationDescription] = {
+  ): F[List[LightweightOrganization]] = {
     val uri = withRequestJson(base, "findOrganizationsByServiceElement",
       jsonObject(
         "serviceElementType" -> serviceElementType.toString,
@@ -70,7 +70,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "parameterValue"     -> parameterValue
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, OrganizationDescription](_))
+      .use(ResponseDecoder.required[F, List[LightweightOrganization]](_))
   }
 
   def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]] = {
@@ -83,11 +83,11 @@ final class HttpDvdvClient[F[_]: Concurrent](
       .use(ResponseDecoder.optional[F, Service](_))
   }
 
-  def findServiceSpecificationUrisByCategory(category: String): F[List[ServiceBase]] = {
+  def findServiceSpecificationUrisByCategory(category: String): F[List[String]] = {
     val uri = withRequestJson(base, "findServiceSpecificationUrisByCategory",
       jsonObject("category" -> category))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[ServiceBase]](_))
+      .use(ResponseDecoder.required[F, List[String]](_))
   }
 
   def verifyCategory(fingerPrint: String, category: String): F[VerificationResult] = {
@@ -98,20 +98,20 @@ final class HttpDvdvClient[F[_]: Concurrent](
   }
 
   // --- 6 batch POSTs ---
-  def batchFindAuthorityDescription(requests: List[Request]): F[OrganizationDescription] =
-    batchPost[OrganizationDescription]("findauthoritydescription", requests)
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]] =
+    batchPost[List[OrganizationDescription]]("findauthoritydescription", requests)
 
   def batchFindCategories(requests: List[Request]): F[List[List[String]]] =
     batchPost[List[List[String]]]("findcategories", requests)
 
-  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[OrganizationDescription] =
-    batchPost[OrganizationDescription]("findOrganizationsByServiceElement", requests)
+  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]] =
+    batchPost[List[List[LightweightOrganization]]]("findOrganizationsByServiceElement", requests)
 
-  def batchFindServiceDescription(requests: List[Request]): F[Service] =
-    batchPost[Service]("findservicedescription", requests)
+  def batchFindServiceDescription(requests: List[Request]): F[List[Service]] =
+    batchPost[List[Service]]("findservicedescription", requests)
 
-  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[Request] =
-    batchPost[Request]("findServiceSpecificationUrisByCategory", requests)
+  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]] =
+    batchPost[List[List[String]]]("findServiceSpecificationUrisByCategory", requests)
 
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]] =
     batchPost[List[VerificationResult]]("verifycategory", requests)

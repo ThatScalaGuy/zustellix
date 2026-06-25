@@ -69,17 +69,17 @@ class AgsResolverSpec extends CatsEffectSuite {
       serviceElementType = Some(kind),
       serviceElementUri  = Some(uri),
       cipherCertificate  = cipherB64.map(b => Certificate(content = Some(b))),
-      serviceElementId   = 7L,
+      serviceElementId   = Some(7L),
       providerId         = Some(9L)
     )
 
   private def serviceWithElements(elems: List[ServiceElementInfo]): Service =
     Service(
-      id                            = 1L,
-      serviceDescriptionName        = "x",
-      serviceSpecificationType      = ServiceSpecificationType.WSDL_OSCI,
-      serviceSpecificationUri       = "u",
-      serviceSpecificationDocument  = "",
+      id                            = Some(1L),
+      serviceDescriptionName        = Some("x"),
+      serviceSpecificationType      = Some(ServiceSpecificationType.WSDL_OSCI),
+      serviceSpecificationUri       = Some("u"),
+      serviceSpecificationDocument  = Some(""),
       serviceElements               = Some(elems)
     )
 
