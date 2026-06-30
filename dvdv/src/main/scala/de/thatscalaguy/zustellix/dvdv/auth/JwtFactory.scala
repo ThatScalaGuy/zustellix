@@ -26,6 +26,7 @@ object JwtFactory {
         subject   = Some(sub),
         audience  = Some(Set(config.tokenUri.renderString)),
         issuedAt  = Some(now.getEpochSecond),
+        notBefore = Some(now.getEpochSecond),
         expiration = Some(now.plusSeconds(config.jwtLifetime.toSeconds).getEpochSecond),
         jwtId     = Some(UUID.randomUUID().toString)
       )

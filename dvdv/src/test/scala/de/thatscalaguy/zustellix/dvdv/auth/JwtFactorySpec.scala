@@ -41,6 +41,8 @@ class JwtFactorySpec extends CatsEffectSuite {
       assertEquals(payload("iss").flatMap(_.asString), Some(expectedSub))
       assertEquals(payload("aud").flatMap(_.asString), Some(cfg.tokenUri.renderString))
       assert(claim.issuedAt.isDefined)
+      assert(claim.notBefore.isDefined)
+      assertEquals(claim.notBefore, claim.issuedAt)
       assert(claim.expiration.isDefined)
       assertEquals(claim.expiration.get - claim.issuedAt.get, 60L)
       assert(claim.jwtId.isDefined)
