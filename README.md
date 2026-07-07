@@ -7,9 +7,11 @@ messaging stack:
   (Deutsches Verwaltungsdiensteverzeichnis), scoped to the
   `extern/standaloneauth/directory` entry path. Look up authorities,
   categories, certificates and service descriptions.
-- **`osci-xmeld`** — sends **XMeld** payloads over **OSCI** (Governikus
-  osci-bibliothek) to the right Meldebehörde, with the OSCI addressee and
-  intermediary routes resolved automatically from DVDV per recipient AGS.
+- **`osci`** — speaks **OSCI** (Governikus osci-bibliothek) in both shapes:
+  synchronous request/response (XMeld Personensuche against a Meldebehörde,
+  routes resolved automatically from DVDV per recipient AGS) and asynchronous
+  messaging (XFamilie-style: store into a recipient's mailbox, fetch + ack
+  from your own mailbox at an intermediary).
 - **`utils`** — the certificate plumbing both of the above share: load
   PKCS12/PEM material, or resolve it by alias from an in-memory map or a
   hot-reloaded directory.
@@ -34,17 +36,17 @@ Design principles:
 
 ## Modules at a glance
 
-| Module       | sbt name     | Depends on   | Purpose |
-|--------------|--------------|--------------|---------|
-| `utils`      | `utils`      | —            | `CertSource` / `CertLoader` / `CertManager` — shared certificate material |
-| `dvdv`       | `dvdv`       | `utils`      | Tagless-final DVDV2 v2 directory client (JWT auth + mules caching) |
-| `osci-xmeld` | `osci-xmeld` | `dvdv`, `utils` | OSCI/XMeld sender; DVDV-driven routing; single- and multi-tenant |
+| Module  | sbt name | Depends on      | Purpose |
+|---------|----------|-----------------|---------|
+| `utils` | `utils`  | —               | `CertSource` / `CertLoader` / `CertManager` — shared certificate material |
+| `dvdv`  | `dvdv`   | `utils`         | Tagless-final DVDV2 v2 directory client (JWT auth + mules caching) |
+| `osci`  | `osci`   | `dvdv`, `utils` | OSCI client: sync request (XMeld), async send + mailbox (XFamilie); DVDV-driven routing; single- and multi-tenant |
 
 Dependency direction:
 
 ```
-osci-xmeld ──▶ dvdv ──▶ utils
-     └───────────────────▶ utils
+osci ──▶ dvdv ──▶ utils
+  └────────────────▶ utils
 ```
 
 ---
@@ -53,12 +55,19 @@ osci-xmeld ──▶ dvdv ──▶ utils
 
 ```scala
 // build.sbt — pick the module you need (transitive deps are pulled in)
-libraryDependencies += "de.thatscalaguy" %% "zustellix-osci-xmeld" % "0.1.1"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.2.0"
 // or just the directory client:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"       % "0.1.1"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.2.0"
 // or only the cert utilities:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-utils"      % "0.1.1"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 ```
+
+> **Migrating from 0.1.x:** `zustellix-osci-xmeld` is frozen at 0.1.1 and
+> replaced by `zustellix-osci`. Package
+> `de.thatscalaguy.zustellix.oscixmeld` → `de.thatscalaguy.zustellix.osci`;
+> `OSCIXMeld.send` → `OsciClient.request`; `OSCIXMeldConfig` → `OsciConfig`
+> (the unused `category` / `requestTimeout` fields are gone);
+> `OSCIXMeldFacade` → `OsciFacade`; `OSCIXMeldError` → `OsciError`.
 
 Built against:
 
@@ -342,13 +351,21 @@ trait DvdvClient[F[_]]:
 
 ---
 
-## `osci-xmeld` — sending XMeld over OSCI
+## `osci` — OSCI messaging (sync + async)
 
-`OSCIXMeld.send(ags, xml)` takes a recipient AGS and an XMeld XML payload and
-returns the synchronous response XML. It:
+`OsciClient` covers the outbound directions; `OsciMailbox` covers the inbound
+one:
+
+| Operation | OSCI message type | Shape |
+|-----------|-------------------|-------|
+| `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche) |
+| `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
+| `OsciMailbox.pending` / `fetch`| `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie) |
+
+Every outbound operation:
 
 1. calls `dvdv.findServiceDescription("ags:<ags>", serviceUri)` **once** per
-   send (memoized by the DVDV mules cache);
+   call (memoized by the DVDV mules cache);
 2. pulls **both** the addressee (`OSCI_ADDRESSEE`) and intermediary
    (`OSCI_INTERMEDIARY`) routes out of that single service description —
    neither is configured statically;
@@ -356,16 +373,16 @@ returns the synchronous response XML. It:
    addressee (the intermediary stays blind to personal data), and transmits it
    via osci-bibliothek;
 4. records a `Laufzettel` to the configured sink (best-effort — a sink
-   failure never fails the send).
+   failure never fails the operation).
 
 > The OSCI bridge requires `CertSource.Pkcs12` — PEM is not supported here.
 
-### Single tenant
+### Single tenant (sync XMeld)
 
 ```scala
 import cats.effect.{IO, IOApp}
 import de.thatscalaguy.zustellix.dvdv.*
-import de.thatscalaguy.zustellix.oscixmeld.*
+import de.thatscalaguy.zustellix.osci.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
 import java.nio.file.Paths
@@ -378,35 +395,109 @@ object SendDemo extends IOApp.Simple:
     baseUri    = uri"https://your-dvdv-betreiber.example",
     certSource = cert
   )
-  val xmeldConfig = OSCIXMeldConfig(
+  val osciConfig = OsciConfig(
     tenantId   = TenantId("flensburg"),
     certSource = cert            // same PKCS12: DVDV signs the JWT, OSCI signs/decrypts
+    // serviceUri + subject default to the XMeld Personensuche profile
   )
 
   def run: IO[Unit] =
     (for
-      dvdv  <- DvdvClient.resource[IO](dvdvConfig)
-      xmeld <- OSCIXMeld.resource[IO](xmeldConfig, dvdv, LaufzettelSink.console[IO])
-    yield xmeld).use { xmeld =>
-      xmeld.send(ags = "01001000", xml = "<xmeld>...</xmeld>").flatMap(IO.println)
+      dvdv <- DvdvClient.resource[IO](dvdvConfig)
+      osci <- OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO])
+    yield osci).use { osci =>
+      osci.request(ags = "01001000", xml = "<xmeld>...</xmeld>").flatMap(IO.println)
     }
 ```
 
-The given `DvdvClient` is owned by the caller — the `OSCIXMeld` resource does
+The given `DvdvClient` is owned by the caller — the `OsciClient` resource does
 not close it.
+
+### Asynchronous send (StoreDelivery)
+
+For profiles whose recipients answer asynchronously (e.g. XFamilie), `send`
+stores the message in the recipient's mailbox at their intermediary and
+returns immediately with a receipt:
+
+```scala
+val xfamConfig = OsciConfig(
+  tenantId   = TenantId("flensburg"),
+  certSource = cert,
+  serviceUri = "urn:xfamilie:...",   // the profile's DVDV service URI
+  subject    = "XFamilie"
+)
+
+OsciClient.resource[IO](xfamConfig, dvdv, LaufzettelSink.console[IO]).use { osci =>
+  osci.send(ags = "01001000", xml = "<xfamilie>...</xfamilie>").flatMap { receipt =>
+    IO.println(s"stored as ${receipt.messageId} (status ${receipt.status})")
+  }
+}
+```
+
+### Receiving: `OsciMailbox` (fetch + ack)
+
+The inbound leg of asynchronous profiles: other parties store messages into
+**your** mailbox at **your** intermediary, and you poll it. The mailbox is
+configured statically (it is yours — it is not resolved from DVDV):
+
+```scala
+import cats.syntax.all.*
+import de.thatscalaguy.zustellix.osci.*
+import java.io.FileInputStream
+import java.net.URI
+import java.security.cert.{CertificateFactory, X509Certificate}
+
+// The intermediary's cipher cert, e.g. from a DER/PEM file:
+val intermedCert: X509Certificate =
+  val in = new FileInputStream("/secrets/intermed.crt")
+  try CertificateFactory.getInstance("X.509")
+    .generateCertificate(in).asInstanceOf[X509Certificate]
+  finally in.close()
+
+val mailboxConfig = OsciMailboxConfig(
+  intermedUri        = URI.create("https://intermed.example/osci-manager"),
+  intermedCipherCert = intermedCert
+  // fetchLimit = 100
+)
+
+OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
+  for
+    waiting <- mailbox.pending                    // un-fetched deliveries, process cards only
+    _       <- waiting.traverse_ { p =>
+                 mailbox.fetch(p.messageId).flatMap { msg =>
+                   IO.println(s"${msg.messageId} [${msg.subject}]: ${msg.xml}")
+                 }
+               }
+  yield ()
+}
+```
+
+**Acknowledgement semantics.** OSCI 1.2 has no separate ack message — a
+successful `fetch` makes the intermediary record a *reception* entry on the
+message's process card, which removes it from `pending`. The fetch **is** the
+acknowledgement: an un-acked (never fetched) message keeps showing up in
+`pending`, a fetched one never does.
+
+**At-least-once processing** is the caller's to build, and the API is shaped
+for it: persist the `messageId`s from `pending` *before* fetching, and after a
+crash re-`fetch` the unprocessed ids directly — deliveries remain stored at
+the intermediary after reception (subject to its retention policy).
+
+One mailbox can serve several profiles; filter on `PendingDelivery.subject`
+client-side if you need to split them.
 
 ### Multi-tenant facade
 
-`OSCIXMeldFacade.send(tenant, ags, xml)` dispatches by tenant. Build it from a
-`ConfigSource` (one `OSCIXMeld` per tenant config), supplying the right
+`OsciFacade` dispatches `request` / `send` by tenant. Build it from a
+`ConfigSource` (one `OsciClient` per tenant config), supplying the right
 `DvdvClient` per tenant:
 
 ```scala
-import de.thatscalaguy.zustellix.oscixmeld.*
+import de.thatscalaguy.zustellix.osci.*
 
 val configs = Map(
-  TenantId("flensburg") -> OSCIXMeldConfig(TenantId("flensburg"), flensburgCert),
-  TenantId("kiel")      -> OSCIXMeldConfig(TenantId("kiel"),      kielCert)
+  TenantId("flensburg") -> OsciConfig(TenantId("flensburg"), flensburgCert),
+  TenantId("kiel")      -> OsciConfig(TenantId("kiel"),      kielCert)
 )
 
 val src: ConfigSource[IO] = ConfigSource.static[IO](configs)
@@ -415,20 +506,19 @@ val srcFromFile = ConfigSource.file[IO](Paths.get("/etc/zustellix/tenants.proper
 
 def dvdvFor(t: TenantId): DvdvClient[IO] = clientsByTenant(t)   // caller owns these
 
-OSCIXMeldFacade.fromConfigs[IO](src, dvdvFor, LaufzettelSink.console[IO]).use { facade =>
-  facade.send(TenantId("kiel"), ags = "01002000", xml = "<xmeld>...</xmeld>")
+OsciFacade.fromConfigs[IO](src, dvdvFor, LaufzettelSink.console[IO]).use { facade =>
+  facade.request(TenantId("kiel"), ags = "01002000", xml = "<xmeld>...</xmeld>")
 }
 ```
 
 Properties-file format for `ConfigSource.file`:
 
 ```properties
-tenant.flensburg.cert.type             = pkcs12
-tenant.flensburg.cert.path             = /secrets/flensburg.p12
-tenant.flensburg.cert.password         = s3cret
-tenant.flensburg.serviceUri            = http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl
-tenant.flensburg.category              = Meldebehörde
-tenant.flensburg.requestTimeoutSeconds = 60
+tenant.flensburg.cert.type     = pkcs12
+tenant.flensburg.cert.path     = /secrets/flensburg.p12
+tenant.flensburg.cert.password = s3cret
+tenant.flensburg.serviceUri    = http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl
+tenant.flensburg.subject       = XMeld
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -436,8 +526,11 @@ tenant.kiel.cert.keyPath  = /secrets/kiel-key.pem
 tenant.kiel.cert.password = optional-key-password
 ```
 
-(`serviceUri`, `category`, `requestTimeoutSeconds` are optional and default to
-the XMeld Personensuche WSDL, `Meldebehörde`, and 60s.)
+(`serviceUri` and `subject` are optional and default to the XMeld
+Personensuche WSDL and `XMeld`.)
+
+Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
+per tenant cert/intermediary.
 
 ### Shared certificates by alias
 
@@ -449,15 +542,19 @@ alias as the tenant id:
 val alias = CertAlias("flensburg")
 
 (for
-  dvdv  <- DvdvClient.resource[IO](dvdvConfig, certManager, alias)
-  xmeld <- OSCIXMeld.resource[IO](xmeldConfig, certManager, alias, dvdv, LaufzettelSink.console[IO])
-yield xmeld).use(_.send("01001000", "<xmeld>...</xmeld>"))
+  dvdv <- DvdvClient.resource[IO](dvdvConfig, certManager, alias)
+  osci <- OsciClient.resource[IO](osciConfig, certManager, alias, dvdv, LaufzettelSink.console[IO])
+yield osci).use(_.request("01001000", "<xmeld>...</xmeld>"))
+
+// the mailbox takes the same alias:
+OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 ```
 
 ### Laufzettel
 
-Each send produces a `Laufzettel(messageId, timestamp, recipientAgs,
-recipientUri, status, rawXml)` handed to a `LaufzettelSink[F]`:
+Each `request` / `send` produces a `Laufzettel(messageId, timestamp,
+recipientAgs, recipientUri, status, rawXml)` handed to a `LaufzettelSink[F]`
+(for `send`, `rawXml` is empty — there is no response payload at store time):
 
 ```scala
 LaufzettelSink.console[IO]   // prints a one-line summary
@@ -470,7 +567,7 @@ val toDb: LaufzettelSink[IO] = new LaufzettelSink[IO]:
 
 ### Error model
 
-All failures are an `OSCIXMeldError` (a `RuntimeException`):
+All failures are an `OsciError` (a `RuntimeException`):
 
 | Error                  | When |
 |------------------------|------|
@@ -480,6 +577,7 @@ All failures are an `OSCIXMeldError` (a `RuntimeException`):
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned a non-`0` feedback code |
+| `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
 | `Certificate`          | cert / key decoding failure |
 | `Config`               | bad configuration (invalid URI, unknown cert type, …) |
 

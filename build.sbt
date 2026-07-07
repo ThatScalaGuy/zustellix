@@ -1,4 +1,4 @@
-ThisBuild / tlBaseVersion := "0.1"
+ThisBuild / tlBaseVersion := "0.2"
 ThisBuild / scalaVersion := "3.3.6"
 ThisBuild / organization := "de.thatscalaguy"
 ThisBuild / organizationName := "ThatScalaGuy"
@@ -31,7 +31,7 @@ ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("21"))
 
 lazy val root = (project in file("."))
   .enablePlugins(NoPublishPlugin)
-  .aggregate(utils, dvdv, osciXmeld)
+  .aggregate(utils, dvdv, osci)
   .settings(
     name := "zustellix"
   )
@@ -78,11 +78,11 @@ lazy val dvdv = (project in file("dvdv"))
     Test / fork := true
   )
 
-lazy val osciXmeld = (project in file("osci-xmeld"))
+lazy val osci = (project in file("osci"))
   .dependsOn(dvdv, utils)
   .settings(
-    name := "zustellix-osci-xmeld",
-    tlVersionIntroduced := Map("3" -> "0.1.1"),
+    name := "zustellix-osci",
+    tlVersionIntroduced := Map("3" -> "0.2.0"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "de.osci" % "osci-bibliothek" % OsciBibV,
