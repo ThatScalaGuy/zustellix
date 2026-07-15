@@ -69,19 +69,6 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 > (the unused `category` / `requestTimeout` fields are gone);
 > `OSCIXMeldFacade` → `OsciFacade`; `OSCIXMeldError` → `OsciError`.
 
-Built against:
-
-| Library        | Version  |
-|----------------|----------|
-| Scala          | 3.3.6    |
-| cats-effect    | 3.6.1    |
-| http4s         | 0.23.30  |
-| circe          | 0.14.13  |
-| mules          | 0.7.0    |
-| jwt-scala      | 10.0.4   |
-| bouncycastle   | 1.79     |
-| osci-bibliothek| 2.4.8    |
-
 ---
 
 ## `utils` — certificates
