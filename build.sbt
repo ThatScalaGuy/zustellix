@@ -8,17 +8,17 @@ ThisBuild / developers ++= List(
   tlGitHubDev("ThatScalaGuy", "Sven Herrmann")
 )
 
-val CatsEffectV = "3.6.1"
-val Http4sV = "0.23.30"
-val CirceV = "0.14.13"
+val CatsEffectV = "3.7.0"
+val Http4sV = "0.23.36"
+val CirceV = "0.14.16"
 val MulesV = "0.7.0"
-val JwtScalaV = "10.0.4"
-val Log4catsV = "2.7.1"
+val JwtScalaV = "11.0.4"
+val Log4catsV = "2.8.0"
 val LogbackV = "1.5.18"
-val BouncyV = "1.79"
-val MunitCEV = "2.1.0"
+val BouncyV = "1.84"
+val MunitCEV = "2.2.0"
 val ProxyVoleV = "1.1.9"
-val OsciBibV = "2.4.8"
+val OsciBibV = "2.5.1"
 
 ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
