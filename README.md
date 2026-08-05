@@ -97,15 +97,34 @@ CertSource.Pem(
 )
 ```
 
-`CertLoader.load[F]` turns either into a `LoadedCert` (private key, X509,
+When the material arrives from a secret manager rather than a readable file,
+use the in-memory variants — same loading, no temp file:
+
+```scala
+CertSource.Pkcs12Bytes(bytes = p12Bytes, password = "changeit")
+
+CertSource.PemBytes(
+  cert        = certBytes,
+  key         = keyBytes,
+  keyPassword = None
+)
+```
+
+`CertLoader.load[F]` turns any of them into a `LoadedCert` (private key, X509,
 SHA-1 fingerprint hex). The DVDV/OSCI clients call this for you — you rarely
 touch it directly.
+
+`toString` is redacted on every case, so a `CertSource` (or a config holding
+one) can be logged without leaking its password.
 
 ### Many certificates by alias: `CertManager`
 
 For multi-tenant deployments, resolve credentials by a `CertAlias` instead of
 hard-coding paths. A `CertManager[F]` returns a `CertCredential` (raw PKCS12
 bytes + password) that **both** DVDV and OSCI can consume for the same tenant.
+
+On this path the cert comes from the manager, so `certSource` is left unset on
+`DvdvConfig` / `OsciConfig` — it defaults to `None`.
 
 **In memory, hot-swappable:**
 
@@ -169,10 +188,10 @@ object Demo extends IOApp.Simple:
 
   val config = DvdvConfig(
     baseUri    = uri"https://your-dvdv-betreiber.example",
-    certSource = CertSource.Pkcs12(
+    certSource = Some(CertSource.Pkcs12(
       path     = Paths.get("/secrets/my-client.p12"),
       password = sys.env("MY_CLIENT_P12_PASSWORD")
-    )
+    ))
   )
 
   def run: IO[Unit] =
@@ -194,7 +213,8 @@ cached and refreshed ahead of expiry; cacheable responses are memoized.
 ### Constructors
 
 ```scala
-// Ember-backed, single tenant from a CertSource (needs Async + Network):
+// Ember-backed, single tenant from config.certSource (needs Async + Network).
+// Raises DvdvError.Config if config.certSource is None:
 DvdvClient.resource[IO](config)
 
 // Ember-backed, signing cert resolved from a shared CertManager by alias:
@@ -213,7 +233,8 @@ import scala.concurrent.duration.*
 
 val config = DvdvConfig(
   baseUri          = uri"https://your-dvdv-betreiber.example",
-  certSource       = CertSource.Pkcs12(p12Path, password),
+  certSource       = Some(CertSource.Pkcs12(p12Path, password)),
+                                      // omit entirely when using CertManager + CertAlias
 
   issuer           = None,            // JWT iss; defaults to "fp:<sha1-fingerprint>"
   audience         = None,            // token URI; defaults to baseUri/extern/standaloneauth/token
@@ -229,7 +250,7 @@ val config = DvdvConfig(
 )
 
 // Disable caching entirely (useful in tests):
-DvdvConfig(baseUri = ???, certSource = ???, cacheConfig = CacheConfig.disabled)
+DvdvConfig(baseUri = ???, certSource = Some(???), cacheConfig = CacheConfig.disabled)
 ```
 
 Default TTLs:
@@ -362,7 +383,8 @@ Every outbound operation:
 4. records a `Laufzettel` to the configured sink (best-effort — a sink
    failure never fails the operation).
 
-> The OSCI bridge requires `CertSource.Pkcs12` — PEM is not supported here.
+> The OSCI bridge requires a PKCS12 `CertSource` (`Pkcs12` or `Pkcs12Bytes`) —
+> neither PEM variant is supported here.
 
 ### Single tenant (sync XMeld)
 
@@ -380,11 +402,11 @@ object SendDemo extends IOApp.Simple:
 
   val dvdvConfig = DvdvConfig(
     baseUri    = uri"https://your-dvdv-betreiber.example",
-    certSource = cert
+    certSource = Some(cert)
   )
   val osciConfig = OsciConfig(
     tenantId   = TenantId("flensburg"),
-    certSource = cert            // same PKCS12: DVDV signs the JWT, OSCI signs/decrypts
+    certSource = Some(cert)      // same PKCS12: DVDV signs the JWT, OSCI signs/decrypts
     // serviceUri + subject default to the XMeld Personensuche profile
   )
 
@@ -409,7 +431,7 @@ returns immediately with a receipt:
 ```scala
 val xfamConfig = OsciConfig(
   tenantId   = TenantId("flensburg"),
-  certSource = cert,
+  certSource = Some(cert),
   serviceUri = "urn:xfamilie:...",   // the profile's DVDV service URI
   subject    = "XFamilie"
 )

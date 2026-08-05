@@ -21,7 +21,7 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
 
   private val config = DvdvConfig(
     baseUri    = uri"http://dvdv.test",
-    certSource = CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")
+    certSource = Some(CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"))
   )
 
   private def client(routes: HttpRoutes[IO]): HttpDvdvClient[IO] =

@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.osci
 
 import cats.effect.{Async, Resource}
+import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
 import de.thatscalaguy.zustellix.utils.cert.{CertManager, CertAlias}
 
@@ -38,7 +39,12 @@ object OsciClient {
       sink:   LaufzettelSink[F]
   ): Resource[F, OsciClient[F]] = {
     val resolver = internal.AgsResolver[F](dvdv, config)
-    internal.OsciBibBridge.resource[F](config.certSource).map { transport =>
+    val certSource = config.certSource.liftTo[F](
+      OsciError.Config(
+        "OsciConfig.certSource is not set — set it, or use the CertManager/CertAlias overload"
+      )
+    )
+    Resource.eval(certSource).flatMap(internal.OsciBibBridge.resource[F](_)).map { transport =>
       new internal.OsciClientImpl[F](config.tenantId, config.subject, transport, resolver, sink)
     }
   }

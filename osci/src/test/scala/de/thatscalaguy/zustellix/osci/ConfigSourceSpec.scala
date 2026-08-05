@@ -11,7 +11,7 @@ class ConfigSourceSpec extends CatsEffectSuite {
   test("static returns the supplied map") {
     val cfg = OsciConfig(
       tenantId   = TenantId("alice"),
-      certSource = CertSource.Pkcs12(Paths.get("k.p12"), "pw")
+      certSource = Some(CertSource.Pkcs12(Paths.get("k.p12"), "pw"))
     )
     ConfigSource.static[IO](Map(TenantId("alice") -> cfg)).load.assertEquals(
       Map(TenantId("alice") -> cfg)
@@ -37,7 +37,7 @@ class ConfigSourceSpec extends CatsEffectSuite {
       assertEquals(c.serviceUri, "http://example/wsdl")
       assertEquals(c.subject, "XFamilie")
       c.certSource match {
-        case CertSource.Pkcs12(p, pw) =>
+        case Some(CertSource.Pkcs12(p, pw)) =>
           assertEquals(p.toString.replace('\\', '/'), "C:/keys/alice.p12")
           assertEquals(pw, "secret")
         case other => fail(s"expected Pkcs12, got $other")
@@ -59,7 +59,7 @@ class ConfigSourceSpec extends CatsEffectSuite {
     ConfigSource.file[IO](tmp).load.map { m =>
       val c = m(TenantId("bob"))
       c.certSource match {
-        case CertSource.Pem(certP, keyP, pw) =>
+        case Some(CertSource.Pem(certP, keyP, pw)) =>
           assertEquals(certP.toString.replace('\\', '/'), "/keys/bob.crt")
           assertEquals(keyP.toString.replace('\\', '/'), "/keys/bob.key")
           assertEquals(pw, None)

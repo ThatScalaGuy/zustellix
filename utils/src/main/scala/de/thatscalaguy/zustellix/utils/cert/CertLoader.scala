@@ -2,7 +2,7 @@ package de.thatscalaguy.zustellix.utils.cert
 
 import cats.effect.Sync
 
-import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
+import java.io.{ByteArrayInputStream, InputStream}
 import java.nio.file.{Files, Path}
 import java.security.cert.{CertificateFactory, X509Certificate}
 import java.security.{KeyStore, MessageDigest, PrivateKey, Security}
@@ -17,8 +17,10 @@ final case class LoadedCert(
 object CertLoader {
 
   def load[F[_]: Sync](src: CertSource): F[LoadedCert] = src match {
-    case CertSource.Pkcs12(path, password) => loadPkcs12[F](path, password)
-    case CertSource.Pem(c, k, p)           => loadPem[F](c, k, p)
+    case CertSource.Pkcs12(path, password)       => loadPkcs12[F](path, password)
+    case CertSource.Pkcs12Bytes(bytes, password) => loadPkcs12Bytes[F](bytes, password)
+    case CertSource.Pem(c, k, p)                 => loadPem[F](c, k, p)
+    case CertSource.PemBytes(c, k, p)            => loadPemBytes[F](c, k, p)
   }
 
   def loadPkcs12Bytes[F[_]: Sync](bytes: Array[Byte], password: String): F[LoadedCert] =
@@ -46,31 +48,43 @@ object CertLoader {
 
   private def loadPem[F[_]: Sync](certPath: Path, keyPath: Path, keyPassword: Option[String]): F[LoadedCert] =
     Sync[F].blocking {
-      registerBouncyCastle()
-
-      val cf = CertificateFactory.getInstance("X.509")
-      val certIn = new FileInputStream(certPath.toFile)
-      val cert =
-        try cf.generateCertificate(certIn).asInstanceOf[X509Certificate]
-        finally certIn.close()
-
-      val privateKey = readPemPrivateKey(keyPath, keyPassword)
-
-      LoadedCert(privateKey, cert, sha1Hex(cert.getEncoded))
+      fromPemBytes(Files.readAllBytes(certPath), Files.readAllBytes(keyPath), keyPassword, keyPath.toString)
     }
+
+  private def loadPemBytes[F[_]: Sync](cert: Array[Byte], key: Array[Byte], keyPassword: Option[String]): F[LoadedCert] =
+    Sync[F].blocking(fromPemBytes(cert, key, keyPassword, "<in-memory PEM key>"))
+
+  private def fromPemBytes(
+      certBytes: Array[Byte],
+      keyBytes: Array[Byte],
+      keyPassword: Option[String],
+      keyLabel: String
+  ): LoadedCert = {
+    registerBouncyCastle()
+
+    val cf     = CertificateFactory.getInstance("X.509")
+    val certIn = new ByteArrayInputStream(certBytes)
+    val cert =
+      try cf.generateCertificate(certIn).asInstanceOf[X509Certificate]
+      finally certIn.close()
+
+    val privateKey = readPemPrivateKey(keyBytes, keyPassword, keyLabel)
+
+    LoadedCert(privateKey, cert, sha1Hex(cert.getEncoded))
+  }
 
   private def registerBouncyCastle(): Unit =
     if (Security.getProvider("BC") == null) {
       val _ = Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
     }
 
-  private def readPemPrivateKey(keyPath: Path, keyPassword: Option[String]): PrivateKey = {
+  private def readPemPrivateKey(keyBytes: Array[Byte], keyPassword: Option[String], keyLabel: String): PrivateKey = {
     import org.bouncycastle.openssl.{PEMEncryptedKeyPair, PEMKeyPair, PEMParser}
     import org.bouncycastle.openssl.jcajce.{JcaPEMKeyConverter, JcePEMDecryptorProviderBuilder, JceOpenSSLPKCS8DecryptorProviderBuilder}
     import org.bouncycastle.pkcs.{PKCS8EncryptedPrivateKeyInfo}
     import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
 
-    val reader = new java.io.InputStreamReader(Files.newInputStream(keyPath))
+    val reader = new java.io.InputStreamReader(new ByteArrayInputStream(keyBytes))
     val parser = new PEMParser(reader)
     try {
       val obj      = parser.readObject()
@@ -80,13 +94,13 @@ object CertLoader {
           converter.getKeyPair(kp).getPrivate
         case enc: PEMEncryptedKeyPair =>
           val pwd = keyPassword.getOrElse(
-            throw new IllegalArgumentException(s"PEM private key at $keyPath is encrypted; keyPassword required")
+            throw new IllegalArgumentException(s"PEM private key at $keyLabel is encrypted; keyPassword required")
           )
           val decryptor = new JcePEMDecryptorProviderBuilder().build(pwd.toCharArray)
           converter.getKeyPair(enc.decryptKeyPair(decryptor)).getPrivate
         case enc: PKCS8EncryptedPrivateKeyInfo =>
           val pwd = keyPassword.getOrElse(
-            throw new IllegalArgumentException(s"PEM PKCS#8 private key at $keyPath is encrypted; keyPassword required")
+            throw new IllegalArgumentException(s"PEM PKCS#8 private key at $keyLabel is encrypted; keyPassword required")
           )
           val decryptor = new JceOpenSSLPKCS8DecryptorProviderBuilder().setProvider("BC").build(pwd.toCharArray)
           converter.getPrivateKey(enc.decryptPrivateKeyInfo(decryptor))
@@ -94,7 +108,7 @@ object CertLoader {
           converter.getPrivateKey(info)
         case other =>
           throw new IllegalArgumentException(
-            s"Unsupported PEM object at $keyPath: ${Option(other).map(_.getClass.getName).getOrElse("null")}"
+            s"Unsupported PEM object at $keyLabel: ${Option(other).map(_.getClass.getName).getOrElse("null")}"
           )
       }
     } finally {

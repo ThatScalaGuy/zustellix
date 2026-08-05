@@ -18,8 +18,8 @@ import de.osci.osci12.roles.{Addressee, Intermed, Originator}
 import de.osci.osci12.samples.impl.HttpTransport
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
-import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
-import java.nio.file.Path
+import java.io.ByteArrayInputStream
+import java.nio.file.Files
 import java.security.Security
 
 private[osci] object OsciBibBridge {
@@ -60,28 +60,25 @@ private[osci] object OsciBibBridge {
   private def buildSignerDecrypter[F[_]: Sync](certSource: CertSource): F[(Signer, Decrypter)] =
     certSource match {
       case CertSource.Pkcs12(path, pwd) =>
-        Sync[F].blocking {
-          val s = openAndUse(path)(in => new PKCS12Signer(in, pwd))
-          val d = openAndUse(path)(in => new PKCS12Decrypter(in, pwd))
-          (s, d)
-        }
-      case _: CertSource.Pem =>
+        Sync[F].blocking(fromPkcs12Bytes(Files.readAllBytes(path), pwd))
+      case CertSource.Pkcs12Bytes(bytes, pwd) =>
+        Sync[F].blocking(fromPkcs12Bytes(bytes, pwd))
+      case _: CertSource.Pem | _: CertSource.PemBytes =>
         Sync[F].raiseError(OsciError.Config(
-          "OSCI bridge requires CertSource.Pkcs12 (PEM is not supported in v1)"
+          "OSCI bridge requires a PKCS12 CertSource (PEM is not supported in v1)"
         ))
     }
 
   private def buildSignerDecrypter[F[_]: Sync](cred: CertCredential): F[(Signer, Decrypter)] =
-    Sync[F].blocking {
-      val s = new PKCS12Signer(new ByteArrayInputStream(cred.pkcs12), cred.password)
-      val d = new PKCS12Decrypter(new ByteArrayInputStream(cred.pkcs12), cred.password)
-      (s, d)
-    }
+    Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password))
 
-  private def openAndUse[A](p: Path)(f: InputStream => A): A = {
-    val in = new FileInputStream(p.toFile)
-    try f(in)
-    finally in.close()
+  /** osci-bibliothek consumes the stream, so the signer and the decrypter each
+   *  get their own over the same bytes.
+   */
+  private def fromPkcs12Bytes(bytes: Array[Byte], pwd: String): (Signer, Decrypter) = {
+    val s = new PKCS12Signer(new ByteArrayInputStream(bytes), pwd)
+    val d = new PKCS12Decrypter(new ByteArrayInputStream(bytes), pwd)
+    (s, d)
   }
 }
 

@@ -66,7 +66,7 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
 
     OsciConfig(
       tenantId   = TenantId(id),
-      certSource = certSource,
+      certSource = Some(certSource),
       serviceUri = kv.getOrElse("serviceUri", OsciConfig.DefaultXMeldServiceUri),
       subject    = kv.getOrElse("subject", OsciConfig.DefaultSubject)
     )

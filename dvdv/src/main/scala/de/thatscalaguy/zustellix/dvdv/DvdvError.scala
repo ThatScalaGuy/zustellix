@@ -6,6 +6,8 @@ import de.thatscalaguy.zustellix.dvdv.model.RevocationReason
 sealed abstract class DvdvError(msg: String, cause: Throwable | Null = null) extends RuntimeException(msg, cause)
 
 object DvdvError {
+  final case class Config(msg: String) extends DvdvError(msg)
+
   final case class AuthenticationError(problem: Problem)
       extends DvdvError(s"401 Unauthorized: ${problem.detail.orElse(problem.title).getOrElse("")}")
 

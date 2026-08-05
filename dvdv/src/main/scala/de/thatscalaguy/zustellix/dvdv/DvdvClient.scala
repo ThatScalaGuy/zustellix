@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.dvdv
 
-import cats.effect.{Async, Resource}
+import cats.effect.{Async, Resource, Sync}
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
 import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
@@ -54,7 +54,7 @@ object DvdvClient {
    */
   def resource[F[_]: Async: Network](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
-      loaded <- Resource.eval(CertLoader.load[F](config.certSource))
+      loaded <- Resource.eval(loadConfigured[F](config))
       http   <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
       client <- assemble[F](config, http, loaded)
     } yield client
@@ -78,7 +78,7 @@ object DvdvClient {
    *  Useful for testing or when the caller wants to control the HTTP backend.
    */
   def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
-    Resource.eval(CertLoader.load[F](config.certSource)).flatMap(assemble[F](config, http, _))
+    Resource.eval(loadConfigured[F](config)).flatMap(assemble[F](config, http, _))
 
   /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. */
   def fromClient[F[_]: Async](
@@ -88,6 +88,17 @@ object DvdvClient {
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
     Resource.eval(certs.loadedCert(alias)).flatMap(assemble[F](config, http, _))
+
+  private def loadConfigured[F[_]: Sync](config: DvdvConfig): F[LoadedCert] =
+    config.certSource match {
+      case Some(src) => CertLoader.load[F](src)
+      case None =>
+        Sync[F].raiseError(
+          DvdvError.Config(
+            "DvdvConfig.certSource is not set — set it, or use the CertManager/CertAlias overload"
+          )
+        )
+    }
 
   private def assemble[F[_]: Async](
       config: DvdvConfig,

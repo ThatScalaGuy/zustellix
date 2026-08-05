@@ -39,4 +39,26 @@ class CertLoaderSpec extends CatsEffectSuite {
       assertEquals(fromBytes.privateKey.getAlgorithm, "RSA")
     }
   }
+
+  test("CertSource.Pkcs12Bytes yields the same fingerprint as CertSource.Pkcs12") {
+    for {
+      bytes     <- IO.blocking(Files.readAllBytes(resourcePath("test-cert.p12")))
+      fromBytes <- CertLoader.load[IO](CertSource.Pkcs12Bytes(bytes, "test"))
+      fromPath  <- CertLoader.load[IO](CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"))
+    } yield assertEquals(fromBytes.fingerprintSha1Hex, fromPath.fingerprintSha1Hex)
+  }
+
+  test("CertSource.PemBytes yields the same fingerprint as CertSource.Pem") {
+    for {
+      certBytes <- IO.blocking(Files.readAllBytes(resourcePath("test-cert.pem")))
+      keyBytes  <- IO.blocking(Files.readAllBytes(resourcePath("test-key.pem")))
+      fromBytes <- CertLoader.load[IO](CertSource.PemBytes(certBytes, keyBytes, None))
+      fromPath  <- CertLoader.load[IO](
+                     CertSource.Pem(resourcePath("test-cert.pem"), resourcePath("test-key.pem"), None)
+                   )
+    } yield {
+      assertEquals(fromBytes.fingerprintSha1Hex, fromPath.fingerprintSha1Hex)
+      assertEquals(fromBytes.privateKey.getAlgorithm, "RSA")
+    }
+  }
 }

@@ -8,7 +8,11 @@ import scala.concurrent.duration.*
 
 final case class DvdvConfig(
     baseUri: Uri,
-    certSource: CertSource,
+    /** The signing cert. Leave empty when building the client from a
+     *  [[de.thatscalaguy.zustellix.utils.cert.CertManager]] + alias, which
+     *  supplies the cert itself.
+     */
+    certSource: Option[CertSource] = None,
     issuer: Option[String] = None,
     audience: Option[Uri] = None,
     jwtLifetime: FiniteDuration = 60.seconds,

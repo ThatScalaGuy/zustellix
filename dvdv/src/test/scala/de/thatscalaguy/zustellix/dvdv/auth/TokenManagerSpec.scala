@@ -21,10 +21,10 @@ class TokenManagerSpec extends CatsEffectSuite {
 
   private val config = DvdvConfig(
     baseUri    = uri"https://dvdv.example",
-    certSource = CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")
+    certSource = Some(CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"))
   )
 
-  private val loaded: IO[LoadedCert] = CertLoader.load[IO](config.certSource)
+  private val loaded: IO[LoadedCert] = CertLoader.load[IO](config.certSource.get)
 
   /** Records every captured POST form so assertions can inspect it. */
   private final case class Recorder(count: Ref[IO, Int], lastForm: Ref[IO, Option[UrlForm]])

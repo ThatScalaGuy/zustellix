@@ -21,7 +21,7 @@ class RevocationSpec extends CatsEffectSuite {
 
   private def config(ignoreRevocation: Boolean = false) = DvdvConfig(
     baseUri          = uri"http://dvdv.test",
-    certSource       = CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"),
+    certSource       = Some(CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")),
     ignoreRevocation = ignoreRevocation
   )
 

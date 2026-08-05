@@ -23,13 +23,13 @@ class JwtFactorySpec extends CatsEffectSuite {
 
   private val cfg = DvdvConfig(
     baseUri    = uri"https://dvdv.example",
-    certSource = CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"),
+    certSource = Some(CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")),
     jwtLifetime = 60.seconds
   )
 
   test("produces a JWT verifiable with the cert's public key and has sub=fp:<fingerprint>") {
     for {
-      loaded <- CertLoader.load[IO](cfg.certSource)
+      loaded <- CertLoader.load[IO](cfg.certSource.get)
       token  <- JwtFactory.make[IO](cfg, loaded)
       decoded = Jwt.decode(token, loaded.certificate.getPublicKey, Seq(JwtAlgorithm.RS256))
     } yield {

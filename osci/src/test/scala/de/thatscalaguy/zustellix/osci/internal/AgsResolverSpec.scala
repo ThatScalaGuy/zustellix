@@ -15,7 +15,7 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   private val Cfg = OsciConfig(
     tenantId   = TenantId("t"),
-    certSource = CertSource.Pkcs12(Paths.get("k.p12"), "pw")
+    certSource = Some(CertSource.Pkcs12(Paths.get("k.p12"), "pw"))
   )
 
   // Self-signed test cert (RSA-1024, valid for one day). `cn` makes each cert distinct
