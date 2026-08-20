@@ -69,6 +69,28 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 > (the unused `category` / `requestTimeout` fields are gone);
 > `OSCIXMeldFacade` → `OsciFacade`; `OSCIXMeldError` → `OsciError`.
 
+> **Migrating to 0.3.x:** feedback handling is now OSCI-1.2-conformant —
+> `3xxx` codes are warnings, not errors (see
+> [OSCI feedback codes](#osci-feedback-codes)). When upgrading:
+>
+> - `OsciReceipt` and `Laufzettel` gained a
+>   `warnings: List[OsciFeedback] = Nil` field. Construction and field
+>   access compile unchanged; pattern matches that destructure every field
+>   need the new one, and codecs/schemas derived from the case-class shape
+>   (circe, doobie, a DB table mirroring `Laufzettel`) must add it.
+> - `request` / `send` no longer raise `OsciError.OsciResponse` for `3xxx`
+>   feedback (e.g. `3802` "Signatur des Empfängers über die Annahme- bzw.
+>   Bearbeitungsantwort fehlt") — the call succeeds and the codes land in
+>   `warnings`. Move alerting/retry logic keyed on that exception to
+>   inspecting `warnings`; a remaining `OsciResponse` is a real `9xxx`
+>   failure. `Laufzettel.status` can now carry a `3xxx` code, so
+>   "starts with `0` = success" checks must accept `0xxx` **and** `3xxx`
+>   as delivered.
+> - All feedback rows are scanned now: a `9xxx` error behind a per-language
+>   duplicate row raises where it previously slipped through, and the
+>   mailbox's `pending` / `fetch` no longer abort on `3800` / `3801`
+>   ("more available than the fetch limit").
+
 ---
 
 ## `utils` — certificates
