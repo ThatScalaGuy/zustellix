@@ -22,14 +22,16 @@ private[osci] object OsciBibSupport {
   // response missing"), "9" = error (the request was not executed). Warnings
   // must not fail the call; they are surfaced via feedbackWarnings. All rows
   // are scanned — an error in a later row (e.g. behind a per-language
-  // duplicate of row 0) fails too.
-  def checkFeedback(fb: Array[Array[String]]): Unit =
+  // duplicate of row 0) fails too. `messageId` (when already issued at this
+  // point of the dialog) rides along on the raised OsciResponse so callers
+  // can still correlate the failed delivery.
+  def checkFeedback(fb: Array[Array[String]], messageId: Option[String] = None): Unit =
     feedbackRows(fb).foreach { row =>
       if row.length >= 2 && row(1) != null
         && !row(1).startsWith("0") && !row(1).startsWith("3")
       then {
         val detail = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
-        throw OsciError.OsciResponse(row(1), detail)
+        throw OsciError.OsciResponse(row(1), detail, messageId)
       }
     }
 

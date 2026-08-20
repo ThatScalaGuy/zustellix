@@ -103,6 +103,97 @@ class OsciClientImplSpec extends CatsEffectSuite {
     }
   }
 
+  test("request: a 9xxx OsciResponse still raises but records a failure Laufzettel") {
+    val err = OsciError.OsciResponse("9000", "boom", Some("msg-9"))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        failingTransport(err),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request(Ags, "<req/>").attempt
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, Left(err))
+        assertEquals(seen.size, 1)
+        assertEquals(seen.head.messageId, "msg-9")
+        assertEquals(seen.head.recipientAgs, Ags)
+        assertEquals(seen.head.recipientUri, Route.addresseeUri)
+        assertEquals(seen.head.status, "9000")
+        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.warnings, Nil)
+      }
+    }
+  }
+
+  test("request: a transport failure records a failure Laufzettel with the error kind as status") {
+    val err = OsciError.OsciTransport(new java.io.IOException("net"))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        failingTransport(err),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request(Ags, "<req/>").attempt
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, Left(err))
+        assertEquals(seen.size, 1)
+        assertEquals(seen.head.messageId, "")
+        assertEquals(seen.head.status, "OsciTransport")
+        assertEquals(seen.head.rawXml, "")
+      }
+    }
+  }
+
+  test("request: a resolver failure records a failure Laufzettel without a recipient URI") {
+    val err = OsciError.AgsNotInDvdv("nope", "u")
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(OsciRawResult("<x/>", "m", "OK")),
+        failingResolver(err),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request("nope", "<x/>").attempt
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, Left(err))
+        assertEquals(seen.size, 1)
+        assertEquals(seen.head.recipientAgs, "nope")
+        assertEquals(seen.head.recipientUri, URI.create(""))
+        assertEquals(seen.head.status, "AgsNotInDvdv")
+        assertEquals(seen.head.messageId, "")
+      }
+    }
+  }
+
+  test("request: a sink failure while recording a failure does not mask the original error") {
+    val err  = OsciError.OsciTransport(new java.io.IOException("net"))
+    val impl = new OsciClientImpl[IO](
+      TenantId("alice"),
+      "XMeld",
+      failingTransport(err),
+      fixedResolver(Route),
+      failingSink
+    )
+    impl.request(Ags, "<x/>").attempt.map {
+      case Left(e: OsciError.OsciTransport) => assertEquals(e.getCause.getMessage, "net")
+      case other                            => fail(s"unexpected: $other")
+    }
+  }
+
   test("AgsNotInDvdv from resolver bubbles up") {
     val impl = new OsciClientImpl[IO](
       TenantId("alice"),
@@ -181,6 +272,32 @@ class OsciClientImplSpec extends CatsEffectSuite {
     impl.send(Ags, "<x/>").attempt.map {
       case Left(e: OsciError.OsciTransport) => assertEquals(e.getCause.getMessage, "net")
       case other                            => fail(s"unexpected: $other")
+    }
+  }
+
+  test("send: a failed store records a failure Laufzettel") {
+    val err = OsciError.OsciResponse("9802", "signature invalid", Some("msg-3"))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XFamilie",
+        failingTransport(err),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.send(Ags, "<req/>").attempt
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, Left(err))
+        assertEquals(seen.size, 1)
+        assertEquals(seen.head.messageId, "msg-3")
+        assertEquals(seen.head.recipientAgs, Ags)
+        assertEquals(seen.head.recipientUri, Route.addresseeUri)
+        assertEquals(seen.head.status, "9802")
+        assertEquals(seen.head.rawXml, "")
+      }
     }
   }
 

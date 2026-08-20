@@ -52,6 +52,21 @@ class OsciBibSupportSpec extends FunSuite {
     }
   }
 
+  test("checkFeedback attaches the messageId to the raised OsciResponse") {
+    val e = intercept[OsciError.OsciResponse] {
+      checkFeedback(Array(Array("de", "9000", "boom")), Some("msg-1"))
+    }
+    assertEquals(e.code, "9000")
+    assertEquals(e.messageId, Some("msg-1"))
+  }
+
+  test("checkFeedback without a messageId raises OsciResponse with messageId None") {
+    val e = intercept[OsciError.OsciResponse] {
+      checkFeedback(Array(Array("de", "9000", "boom")))
+    }
+    assertEquals(e.messageId, None)
+  }
+
   test("checkFeedback: a \"0...\" success code in row 0 does not raise") {
     checkFeedback(Array(Array("de", "0800", "ok"))) // no exception
   }

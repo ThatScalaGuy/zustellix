@@ -115,7 +115,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
         val rsp = mediate.send()
-        checkFeedback(rsp.getFeedback)
+        checkFeedback(rsp.getFeedback, Option(msgIdResp.getMessageId))
 
         try new ExitDialog(dialog).send()
         catch case _: Throwable => () // best-effort cleanup
@@ -156,7 +156,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
         val rsp = storeDelivery.send()
-        checkFeedback(rsp.getFeedback)
+        checkFeedback(rsp.getFeedback, Option(msgIdResp.getMessageId))
 
         try new ExitDialog(dialog).send()
         catch case _: Throwable => () // best-effort cleanup
