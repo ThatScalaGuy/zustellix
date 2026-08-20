@@ -34,6 +34,14 @@ class OsciErrorSpec extends FunSuite {
     assert(e.getMessage.contains("nope"))
   }
 
+  test("OsciResponse carries the messageId when one was already issued") {
+    assertEquals(OsciError.OsciResponse("9000", "boom").messageId, None)
+    assertEquals(
+      OsciError.OsciResponse("9000", "boom", Some("msg-1")).messageId,
+      Some("msg-1")
+    )
+  }
+
   test("NoSuchMessage message includes the message id") {
     val e = OsciError.NoSuchMessage("msg-42")
     assert(e.getMessage.contains("msg-42"))

@@ -90,6 +90,14 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   duplicate row raises where it previously slipped through, and the
 >   mailbox's `pending` / `fetch` no longer abort on `3800` / `3801`
 >   ("more available than the fetch limit").
+> - `OsciError.OsciResponse` gained a `messageId: Option[String] = None`
+>   field. Construction compiles unchanged; pattern matches that destructure
+>   every field need the new one.
+> - Failed deliveries now record a `Laufzettel` too (see
+>   [Laufzettel](#laufzettel)). Sinks that treated every record as a
+>   delivered message must check `status`: `0xxx` / `3xxx` is delivered,
+>   anything else (a `9xxx` code or an error kind like `OsciTransport`) is a
+>   failure record with empty `rawXml`.
 
 ---
 
@@ -402,8 +410,9 @@ Every outbound operation:
 3. signs the content with the Originator cert, end-to-end encrypts it for the
    addressee (the intermediary stays blind to personal data), and transmits it
    via osci-bibliothek;
-4. records a `Laufzettel` to the configured sink (best-effort — a sink
-   failure never fails the operation).
+4. records a `Laufzettel` to the configured sink — on failure too, so the
+   audit trail is not success-only (best-effort — a sink failure never fails
+   the operation).
 
 > The OSCI bridge requires a PKCS12 `CertSource` (`Pkcs12` or `Pkcs12Bytes`) —
 > neither PEM variant is supported here.
@@ -644,6 +653,21 @@ val toDb: LaufzettelSink[IO] = new LaufzettelSink[IO]:
   def record(tenant: TenantId, l: Laufzettel): IO[Unit] = repo.insert(tenant, l)
 ```
 
+Failed deliveries are recorded too, so the sink sees the complete audit
+trail, not just successes. For a failure Laufzettel:
+
+- `status` is the OSCI feedback code for a `9xxx` response
+  (`OsciError.OsciResponse`) and the error kind otherwise (e.g.
+  `OsciTransport`, `AgsNotInDvdv`);
+- `messageId` is the id issued by `GetMessageId` when the delivery got that
+  far, `""` otherwise;
+- `rawXml` is empty, `warnings` is `Nil`;
+- `recipientUri` is empty when the resolver itself failed (no route exists).
+
+Recording stays best-effort in both directions: a sink failure never fails
+the operation, and a failure record never replaces or swallows the raised
+`OsciError`.
+
 ### Error model
 
 All failures are an `OsciError` (a `RuntimeException`):
@@ -655,7 +679,7 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `RecipientCertMissing` | the service description has no cipher certificate |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
-| `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code |
+| `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
 | `Certificate`          | cert / key decoding failure |
 | `Config`               | bad configuration (invalid URI, unknown cert type, …) |
@@ -669,7 +693,7 @@ the four-digit code:
 |--------|---------|----------|
 | `0xxx` | success | normal result |
 | `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciReceipt.warnings` and `Laufzettel.warnings` |
-| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` |
+| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued) |
 
 All feedback rows are inspected, so an error behind a per-language duplicate
 row fails too. A common warning is `3802` ("Signatur des Empfängers über die

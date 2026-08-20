@@ -26,8 +26,16 @@ object OsciError {
   final case class OsciTransport(cause: Throwable)
       extends OsciError("OSCI transport failure", cause)
 
-  final case class OsciResponse(code: String, detail: String)
-      extends OsciError(s"OSCI response error [$code]: $detail")
+  /** OSCI returned an error-class (`9xxx`) feedback code. `messageId` is the
+   *  intermediary-issued message id when one was already assigned before the
+   *  failure (i.e. `GetMessageId` succeeded and the delivery itself failed);
+   *  `None` when the failure happened before an id existed.
+   */
+  final case class OsciResponse(
+      code:      String,
+      detail:    String,
+      messageId: Option[String] = None
+  ) extends OsciError(s"OSCI response error [$code]: $detail")
 
   final case class NoSuchMessage(messageId: String)
       extends OsciError(s"No delivery found for messageId '$messageId'")
