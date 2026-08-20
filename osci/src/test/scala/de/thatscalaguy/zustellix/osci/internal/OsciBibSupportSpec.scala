@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.OsciError
+import de.thatscalaguy.zustellix.osci.{OsciError, OsciFeedback}
 import munit.FunSuite
 
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
@@ -42,9 +42,10 @@ class OsciBibSupportSpec extends FunSuite {
 
   private lazy val role = new Originator(cert, cert)
 
-  // OSCI feedback rows are [lang, code, text]; code "0..." means success.
+  // OSCI feedback rows are [lang, code, text]. OSCI 1.2 code classes:
+  // "0xxx" = success, "3xxx" = warning (request executed), "9xxx" = error.
 
-  test("checkFeedback: a non-\"0\" code in row 0 raises OsciResponse(code, detail)") {
+  test("checkFeedback: a \"9...\" error code in row 0 raises OsciResponse(code, detail)") {
     val fb = Array(Array("de", "9000", "boom"))
     interceptMessage[OsciError.OsciResponse]("OSCI response error [9000]: boom") {
       checkFeedback(fb)
@@ -53,6 +54,17 @@ class OsciBibSupportSpec extends FunSuite {
 
   test("checkFeedback: a \"0...\" success code in row 0 does not raise") {
     checkFeedback(Array(Array("de", "0800", "ok"))) // no exception
+  }
+
+  test("checkFeedback: a \"3...\" warning code does not raise (request was executed)") {
+    // 3802 = recipient signature over acceptance/processing response missing.
+    checkFeedback(Array(Array("en", "3802", "Signature of the recipient ... is missing")))
+  }
+
+  test("checkFeedback: an unknown code class is treated as an error") {
+    interceptMessage[OsciError.OsciResponse]("OSCI response error [X999]: strange") {
+      checkFeedback(Array(Array("de", "X999", "strange")))
+    }
   }
 
   test("checkFeedback: null / empty feedback is tolerated") {
@@ -70,24 +82,51 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(topFeedbackCode(Array.empty[Array[String]]), "")
   }
 
-  // RESIDUAL GAP (documented, not ideal): checkFeedback and topFeedbackCode
-  // only ever inspect row 0. An error code sitting in a LATER feedback row is
-  // NOT surfaced today. We assert the CURRENT behaviour so a future fix that
-  // scans all rows will flip these expectations on purpose.
-  test("checkFeedback ignores an error in a LATER row (row 0 only — current behaviour)") {
+  test("checkFeedback scans ALL rows: an error in a LATER row raises") {
     val fb = Array(
       Array("de", "0800", "envelope ok"),
       Array("de", "9000", "inner error in a later row")
     )
-    checkFeedback(fb) // does NOT raise, because only row 0 is read
+    interceptMessage[OsciError.OsciResponse]("OSCI response error [9000]: inner error in a later row") {
+      checkFeedback(fb)
+    }
   }
 
-  test("topFeedbackCode returns row-0 code even when a later row carries an error (current behaviour)") {
+  test("checkFeedback: a warning alongside a success code still does not raise") {
     val fb = Array(
       Array("de", "0800", "envelope ok"),
-      Array("de", "9000", "inner error in a later row")
+      Array("de", "3802", "Signatur des Empfängers fehlt")
+    )
+    checkFeedback(fb)
+  }
+
+  test("topFeedbackCode returns the row-0 code regardless of later rows") {
+    val fb = Array(
+      Array("de", "0800", "envelope ok"),
+      Array("de", "3802", "warning in a later row")
     )
     assertEquals(topFeedbackCode(fb), "0800")
+  }
+
+  test("feedbackWarnings collects 3xxx rows and dedups per-language repeats") {
+    val fb = Array(
+      Array("de", "3802", "Signatur des Empfängers über die Annahme- bzw. Bearbeitungsantwort fehlt"),
+      Array("en", "3802", "Signature of the recipient over the acceptance response or processing response is missing"),
+      Array("de", "3500", "Zertifikat zeitlich ungültig")
+    )
+    assertEquals(
+      feedbackWarnings(fb),
+      List(
+        OsciFeedback("3802", "Signatur des Empfängers über die Annahme- bzw. Bearbeitungsantwort fehlt"),
+        OsciFeedback("3500", "Zertifikat zeitlich ungültig")
+      )
+    )
+  }
+
+  test("feedbackWarnings ignores success/error rows and tolerates null / empty feedback") {
+    assertEquals(feedbackWarnings(Array(Array("de", "0800", "ok"))), Nil)
+    assertEquals(feedbackWarnings(null), Nil)
+    assertEquals(feedbackWarnings(Array.empty[Array[String]]), Nil)
   }
 
   test("firstContentData returns the first non-empty content payload") {

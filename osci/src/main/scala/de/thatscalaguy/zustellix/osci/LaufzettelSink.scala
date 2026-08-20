@@ -12,9 +12,12 @@ object LaufzettelSink {
     new LaufzettelSink[F] {
       def record(tenant: TenantId, l: Laufzettel): F[Unit] =
         Sync[F].delay {
+          val warnings =
+            if l.warnings.isEmpty then ""
+            else l.warnings.map(_.code).mkString(" warnings=", ",", "")
           println(
             s"[Laufzettel tenant=${tenant.value} ags=${l.recipientAgs} " +
-              s"messageId=${l.messageId} status=${l.status} " +
+              s"messageId=${l.messageId} status=${l.status}$warnings " +
               s"uri=${l.recipientUri} at=${l.timestamp}]"
           )
         }

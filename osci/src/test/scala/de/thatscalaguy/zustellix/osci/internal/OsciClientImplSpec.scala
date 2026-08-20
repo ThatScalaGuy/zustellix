@@ -80,6 +80,29 @@ class OsciClientImplSpec extends CatsEffectSuite {
     }
   }
 
+  test("feedback warnings from the transport land on the Laufzettel") {
+    val warning = OsciFeedback("3802", "Signatur des Empfängers fehlt")
+    val raw     = OsciRawResult("<resp/>", "msg-1", "3802", List(warning))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(raw),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request(Ags, "<req/>")
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, "<resp/>")
+        assertEquals(seen.head.status, "3802")
+        assertEquals(seen.head.warnings, List(warning))
+      }
+    }
+  }
+
   test("AgsNotInDvdv from resolver bubbles up") {
     val impl = new OsciClientImpl[IO](
       TenantId("alice"),

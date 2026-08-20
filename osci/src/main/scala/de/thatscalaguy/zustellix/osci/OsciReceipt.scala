@@ -10,9 +10,13 @@ import java.time.Instant
  *                   handle for any later process-card inquiry
  *  @param status    top OSCI feedback code (e.g. "0800")
  *  @param creation  intermediary's creation timestamp from the process card
+ *  @param warnings  warning-class (`3xxx`) feedback entries — the request was
+ *                   executed, but the intermediary flagged something (e.g.
+ *                   a certificate validity warning)
  */
 final case class OsciReceipt(
     messageId: String,
     status:    String,
-    creation:  Option[Instant]
+    creation:  Option[Instant],
+    warnings:  List[OsciFeedback] = Nil
 )

@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.OsciReceipt
+import de.thatscalaguy.zustellix.osci.{OsciFeedback, OsciReceipt}
 
 import java.net.URI
 import java.security.cert.X509Certificate
@@ -26,7 +26,8 @@ final case class OsciRoute(
 final case class OsciRawResult(
     responseXml: String,
     messageId:   String,
-    status:      String
+    status:      String,
+    warnings:    List[OsciFeedback] = Nil
 )
 
 /** Narrow mockable seam over the Governikus osci-bibliothek Java library for
