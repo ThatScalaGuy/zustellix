@@ -69,7 +69,7 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 > (the unused `category` / `requestTimeout` fields are gone);
 > `OSCIXMeldFacade` → `OsciFacade`; `OSCIXMeldError` → `OsciError`.
 
-> **Migrating to 0.3.x:** feedback handling is now OSCI-1.2-conformant —
+> **Migrating to 0.4.x:** feedback handling is now OSCI-1.2-conformant —
 > `3xxx` codes are warnings, not errors (see
 > [OSCI feedback codes](#osci-feedback-codes)). When upgrading:
 >
