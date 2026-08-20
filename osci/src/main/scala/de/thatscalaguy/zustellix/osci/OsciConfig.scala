@@ -2,12 +2,18 @@ package de.thatscalaguy.zustellix.osci
 
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 
+import scala.concurrent.duration.FiniteDuration
+
 /** Outbound OSCI client configuration.
  *
  *  `serviceUri` selects the DVDV service description the recipient routes are
  *  resolved from; `subject` is the OSCI message subject. The defaults match
  *  the XMeld Personensuche profile — XFamilie (or other) profiles override
  *  both.
+ *
+ *  `connectTimeout` / `readTimeout` bound the default [[OsciHttpTransport]]'s
+ *  `HttpURLConnection`s; they are ignored when a custom transport is passed
+ *  to `OsciClient.resource`.
  */
 final case class OsciConfig(
     tenantId: TenantId,
@@ -17,7 +23,9 @@ final case class OsciConfig(
      */
     certSource: Option[CertSource] = None,
     serviceUri: String = OsciConfig.DefaultXMeldServiceUri,
-    subject: String = OsciConfig.DefaultSubject
+    subject: String = OsciConfig.DefaultSubject,
+    connectTimeout: FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
+    readTimeout: FiniteDuration = OsciHttpTransport.DefaultReadTimeout
 )
 
 object OsciConfig {

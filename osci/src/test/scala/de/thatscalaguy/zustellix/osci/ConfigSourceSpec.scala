@@ -5,6 +5,7 @@ import de.thatscalaguy.zustellix.utils.cert.CertSource
 import munit.CatsEffectSuite
 
 import java.nio.file.{Files, Paths}
+import scala.concurrent.duration.*
 
 class ConfigSourceSpec extends CatsEffectSuite {
 
@@ -65,6 +66,51 @@ class ConfigSourceSpec extends CatsEffectSuite {
           assertEquals(pw, None)
         case other => fail(s"expected Pem, got $other")
       }
+    }
+  }
+
+  test("file parses optional timeouts and defaults them when absent") {
+    val props =
+      """tenant.alice.cert.type        = pkcs12
+        |tenant.alice.cert.path        = /keys/alice.p12
+        |tenant.alice.cert.password    = pw
+        |tenant.alice.connectTimeoutMs = 5000
+        |tenant.alice.readTimeoutMs    = 30000
+        |tenant.bob.cert.type          = pkcs12
+        |tenant.bob.cert.path          = /keys/bob.p12
+        |tenant.bob.cert.password      = pw
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.map { m =>
+      val alice = m(TenantId("alice"))
+      assertEquals(alice.connectTimeout, 5.seconds)
+      assertEquals(alice.readTimeout, 30.seconds)
+      val bob = m(TenantId("bob"))
+      assertEquals(bob.connectTimeout, OsciHttpTransport.DefaultConnectTimeout)
+      assertEquals(bob.readTimeout, OsciHttpTransport.DefaultReadTimeout)
+    }
+  }
+
+  test("file raises Config error on a non-numeric timeout") {
+    val props =
+      """tenant.alice.cert.type        = pkcs12
+        |tenant.alice.cert.path        = /keys/alice.p12
+        |tenant.alice.cert.password    = pw
+        |tenant.alice.connectTimeoutMs = fast
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.attempt.map {
+      case Left(e: OsciError.Config) =>
+        assert(e.getMessage.contains("connectTimeoutMs"), e.getMessage)
+      case other => fail(s"expected Config error, got $other")
     }
   }
 
