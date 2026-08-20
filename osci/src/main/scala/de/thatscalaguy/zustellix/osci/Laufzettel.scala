@@ -9,5 +9,6 @@ final case class Laufzettel(
     recipientAgs: String,
     recipientUri: URI,
     status:       String,
-    rawXml:       String
+    rawXml:       String,
+    warnings:     List[OsciFeedback] = Nil
 )

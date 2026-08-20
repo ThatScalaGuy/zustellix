@@ -23,7 +23,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                   recipientAgs = ags,
                   recipientUri = route.addresseeUri,
                   status       = result.status,
-                  rawXml       = result.responseXml
+                  rawXml       = result.responseXml,
+                  warnings     = result.warnings
                 )
       _      <- sink.record(tenantId, lz).attempt.void
     }
@@ -40,7 +41,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                    recipientAgs = ags,
                    recipientUri = route.addresseeUri,
                    status       = receipt.status,
-                   rawXml       = "" // async: no response payload at store time
+                   rawXml       = "", // async: no response payload at store time
+                   warnings     = receipt.warnings
                  )
       _       <- sink.record(tenantId, lz).attempt.void
     }

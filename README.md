@@ -562,8 +562,9 @@ OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 ### Laufzettel
 
 Each `request` / `send` produces a `Laufzettel(messageId, timestamp,
-recipientAgs, recipientUri, status, rawXml)` handed to a `LaufzettelSink[F]`
-(for `send`, `rawXml` is empty — there is no response payload at store time):
+recipientAgs, recipientUri, status, rawXml, warnings)` handed to a
+`LaufzettelSink[F]` (for `send`, `rawXml` is empty — there is no response
+payload at store time):
 
 ```scala
 LaufzettelSink.console[IO]   // prints a one-line summary
@@ -585,10 +586,28 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `RecipientCertMissing` | the service description has no cipher certificate |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
-| `OsciResponse`         | OSCI returned a non-`0` feedback code |
+| `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
 | `Certificate`          | cert / key decoding failure |
 | `Config`               | bad configuration (invalid URI, unknown cert type, …) |
+
+#### OSCI feedback codes
+
+OSCI-Transport 1.2 classifies feedback (Rückmeldungen) by the first digit of
+the four-digit code:
+
+| Class  | Meaning | Handling |
+|--------|---------|----------|
+| `0xxx` | success | normal result |
+| `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciReceipt.warnings` and `Laufzettel.warnings` |
+| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` |
+
+All feedback rows are inspected, so an error behind a per-language duplicate
+row fails too. A common warning is `3802` ("Signatur des Empfängers über die
+Annahme- bzw. Bearbeitungsantwort fehlt"): the recipient's gateway answered
+without signing its response. The response payload is still delivered — only
+the cryptographic proof over the recipient's answer is missing, which the
+`warnings` list lets you log or escalate per your own policy.
 
 ---
 

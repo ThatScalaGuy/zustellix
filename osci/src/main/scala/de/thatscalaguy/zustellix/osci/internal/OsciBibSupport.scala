@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.OsciError
+import de.thatscalaguy.zustellix.osci.{OsciError, OsciFeedback}
 
 import de.osci.osci12.OSCIException
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
@@ -16,21 +16,42 @@ import scala.util.Try
  */
 private[osci] object OsciBibSupport {
 
-  // OSCI feedback rows are [lang, code, text]; a code starting with "0" means
-  // success. Only row 0 is inspected — a documented residual gap, see
-  // OsciBibSupportSpec.
+  // OSCI feedback rows are [lang, code, text]. OSCI 1.2 classifies codes by
+  // their first digit: "0" = success, "3" = warning (the request WAS
+  // executed — e.g. 3802 "recipient signature over the acceptance/processing
+  // response missing"), "9" = error (the request was not executed). Warnings
+  // must not fail the call; they are surfaced via feedbackWarnings. All rows
+  // are scanned — an error in a later row (e.g. behind a per-language
+  // duplicate of row 0) fails too.
   def checkFeedback(fb: Array[Array[String]]): Unit =
-    Option(fb).filter(_.nonEmpty).map(_(0)) match {
-      case Some(row) if row.length >= 2 && row(1) != null && !row(1).startsWith("0") =>
+    feedbackRows(fb).foreach { row =>
+      if row.length >= 2 && row(1) != null
+        && !row(1).startsWith("0") && !row(1).startsWith("3")
+      then {
         val detail = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
         throw OsciError.OsciResponse(row(1), detail)
-      case _ => ()
+      }
     }
 
+  /** Warning-class (`3xxx`) feedback entries, deduplicated by code — the
+   *  intermediary usually repeats the same code once per requested language.
+   */
+  def feedbackWarnings(fb: Array[Array[String]]): List[OsciFeedback] =
+    feedbackRows(fb)
+      .collect {
+        case row if row.length >= 2 && row(1) != null && row(1).startsWith("3") =>
+          val text = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
+          OsciFeedback(row(1), text)
+      }
+      .distinctBy(_.code)
+
   def topFeedbackCode(fb: Array[Array[String]]): String =
-    Option(fb).filter(_.nonEmpty).flatMap(_.headOption).flatMap { r =>
+    feedbackRows(fb).headOption.flatMap { r =>
       if r.length >= 2 then Option(r(1)) else None
     }.getOrElse("")
+
+  private def feedbackRows(fb: Array[Array[String]]): List[Array[String]] =
+    Option(fb).map(_.toList).getOrElse(Nil).filter(_ != null)
 
   def firstContentData(ccs: List[ContentContainer]): Option[String] =
     ccs.iterator

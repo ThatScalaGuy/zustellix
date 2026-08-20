@@ -122,7 +122,8 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
           responseXml = extractXml(rsp.getContentContainer, rsp.getEncryptedData, originator)
             .getOrElse(""),
           messageId = msgIdResp.getMessageId,
-          status    = topFeedbackCode(rsp.getFeedback)
+          status    = topFeedbackCode(rsp.getFeedback),
+          warnings  = feedbackWarnings(rsp.getFeedback)
         )
       }
       catch {
@@ -158,7 +159,8 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         OsciReceipt(
           messageId = msgIdResp.getMessageId,
           status    = topFeedbackCode(rsp.getFeedback),
-          creation  = parseTimestamp(rsp.getTimestampCreation)
+          creation  = parseTimestamp(rsp.getTimestampCreation),
+          warnings  = feedbackWarnings(rsp.getFeedback)
         )
       }
       catch {
