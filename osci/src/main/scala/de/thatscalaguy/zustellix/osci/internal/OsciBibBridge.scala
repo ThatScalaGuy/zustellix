@@ -15,7 +15,6 @@ import de.osci.osci12.messagetypes.{
   StoreDelivery
 }
 import de.osci.osci12.roles.{Addressee, Intermed, Originator}
-import de.osci.osci12.samples.impl.HttpTransport
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
 import java.io.ByteArrayInputStream
@@ -24,14 +23,20 @@ import java.security.Security
 
 private[osci] object OsciBibBridge {
 
-  def resource[F[_]: Sync](certSource: CertSource): Resource[F, OsciTransport[F]] =
-    Resource.eval(originator[F](certSource)).map(new OsciBibBridgeImpl[F](_))
+  def resource[F[_]: Sync](
+      certSource: CertSource,
+      transport:  TransportI
+  ): Resource[F, OsciTransport[F]] =
+    Resource.eval(originator[F](certSource)).map(new OsciBibBridgeImpl[F](_, transport))
 
   /** Alias-keyed path: the same PKCS12 the DVDV client uses, supplied by the
    *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes.
    */
-  def resource[F[_]: Sync](cred: CertCredential): Resource[F, OsciTransport[F]] =
-    Resource.eval(originator[F](cred)).map(new OsciBibBridgeImpl[F](_))
+  def resource[F[_]: Sync](
+      cred:      CertCredential,
+      transport: TransportI
+  ): Resource[F, OsciTransport[F]] =
+    Resource.eval(originator[F](cred)).map(new OsciBibBridgeImpl[F](_, transport))
 
   /** Our own OSCI role: signer + decrypter from the tenant's PKCS12. Also
    *  used by the mailbox bridge, where the same role fetches and decrypts
@@ -84,7 +89,7 @@ private[osci] object OsciBibBridge {
 
 private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
     originator: Originator,
-    transport: TransportI = new HttpTransport()
+    transport: TransportI
 ) extends OsciTransport[F] {
 
   import OsciBibSupport.*

@@ -517,6 +517,50 @@ the intermediary after reception (subject to its retention policy).
 One mailbox can serve several profiles; filter on `PendingDelivery.subject`
 client-side if you need to split them.
 
+### HTTP timeouts and custom transport
+
+All wire operations go through an `OsciHttpTransport` — a drop-in for
+osci-bibliothek's sample `HttpTransport` that additionally sets a connect and
+a read timeout on every `HttpURLConnection`, so a stalled intermediary
+surfaces as an `OsciError.OsciTransport` instead of blocking the calling thread
+forever (the bridges run inside `Sync[F].blocking`, which cannot be
+cancelled once started). Both timeouts are configurable per client/mailbox
+and default to 10 s connect / 120 s read:
+
+```scala
+import scala.concurrent.duration.*
+
+val osciConfig = OsciConfig(
+  tenantId       = TenantId("flensburg"),
+  certSource     = Some(cert),
+  connectTimeout = 5.seconds,
+  readTimeout    = 60.seconds
+)
+
+val mailboxConfig = OsciMailboxConfig(
+  intermedUri        = URI.create("https://intermed.example/osci-manager"),
+  intermedCipherCert = intermedCert,
+  connectTimeout     = 5.seconds,
+  readTimeout        = 60.seconds
+)
+```
+
+Note that `readTimeout` bounds each blocking read, not the whole exchange —
+size it for the slowest expected synchronous round trip (`request` waits for
+the addressee's answer within the call).
+
+Both `OsciClient.resource` and `OsciMailbox.resource` also accept your own
+`de.osci.osci12.extinterfaces.TransportI` as a trailing argument (proxies,
+custom TLS, instrumentation, …); the config timeouts then do not apply — the
+transport owns its own settings:
+
+```scala
+val myTransport: de.osci.osci12.extinterfaces.TransportI = ...
+
+OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO], myTransport)
+OsciMailbox.resource[IO](mailboxConfig, cert, myTransport)
+```
+
 ### Multi-tenant facade
 
 `OsciFacade` dispatches `request` / `send` by tenant. Build it from a
@@ -545,11 +589,13 @@ OsciFacade.fromConfigs[IO](src, dvdvFor, LaufzettelSink.console[IO]).use { facad
 Properties-file format for `ConfigSource.file`:
 
 ```properties
-tenant.flensburg.cert.type     = pkcs12
-tenant.flensburg.cert.path     = /secrets/flensburg.p12
-tenant.flensburg.cert.password = s3cret
-tenant.flensburg.serviceUri    = http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl
-tenant.flensburg.subject       = XMeld
+tenant.flensburg.cert.type        = pkcs12
+tenant.flensburg.cert.path        = /secrets/flensburg.p12
+tenant.flensburg.cert.password    = s3cret
+tenant.flensburg.serviceUri       = http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl
+tenant.flensburg.subject          = XMeld
+tenant.flensburg.connectTimeoutMs = 5000
+tenant.flensburg.readTimeoutMs    = 60000
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -558,7 +604,8 @@ tenant.kiel.cert.password = optional-key-password
 ```
 
 (`serviceUri` and `subject` are optional and default to the XMeld
-Personensuche WSDL and `XMeld`.)
+Personensuche WSDL and `XMeld`; `connectTimeoutMs` / `readTimeoutMs` are
+optional and default to 10 s / 120 s.)
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
 per tenant cert/intermediary.

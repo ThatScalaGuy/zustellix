@@ -19,7 +19,6 @@ import de.osci.osci12.messagetypes.{
   OSCIMessage
 }
 import de.osci.osci12.roles.{Intermed, Originator}
-import de.osci.osci12.samples.impl.HttpTransport
 
 /** osci-bibliothek-backed mailbox. The same Originator role that signs the
  *  fetch dialog carries our Decrypter for the inbound payloads (they are
@@ -28,7 +27,7 @@ import de.osci.osci12.samples.impl.HttpTransport
 private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
     originator: Originator,
     config:     OsciMailboxConfig,
-    transport:  TransportI = new HttpTransport()
+    transport:  TransportI
 ) extends OsciMailbox[F] {
 
   import OsciBibSupport.*

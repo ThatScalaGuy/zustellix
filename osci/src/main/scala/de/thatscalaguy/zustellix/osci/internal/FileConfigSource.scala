@@ -7,6 +7,7 @@ import de.thatscalaguy.zustellix.osci.*
 import java.io.FileInputStream
 import java.nio.file.{Path, Paths}
 import java.util.Properties
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
 /** Loads tenant configurations from a Java properties file with keys of the form
@@ -18,6 +19,8 @@ import scala.jdk.CollectionConverters.*
  *   tenant.<id>.cert.keyPath           = <path>             (pem only)
  *   tenant.<id>.serviceUri             = <wsdl uri>          (optional)
  *   tenant.<id>.subject                = <osci subject>      (optional)
+ *   tenant.<id>.connectTimeoutMs       = <millis>            (optional)
+ *   tenant.<id>.readTimeoutMs          = <millis>            (optional)
  * }}}
  *
  *  The intermediary is no longer configured here — it is resolved per send
@@ -64,11 +67,22 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
         throw OsciError.Config(s"tenant.$id.cert.type must be 'pkcs12' or 'pem', got '$other'")
     }
 
+    def timeoutMs(k: String, default: FiniteDuration): FiniteDuration =
+      kv.get(k).fold(default) { v =>
+        v.trim.toLongOption.filter(_ > 0).map(_.millis).getOrElse(
+          throw OsciError.Config(
+            s"tenant.$id.$k must be a positive number of milliseconds, got '$v'"
+          )
+        )
+      }
+
     OsciConfig(
-      tenantId   = TenantId(id),
-      certSource = Some(certSource),
-      serviceUri = kv.getOrElse("serviceUri", OsciConfig.DefaultXMeldServiceUri),
-      subject    = kv.getOrElse("subject", OsciConfig.DefaultSubject)
+      tenantId       = TenantId(id),
+      certSource     = Some(certSource),
+      serviceUri     = kv.getOrElse("serviceUri", OsciConfig.DefaultXMeldServiceUri),
+      subject        = kv.getOrElse("subject", OsciConfig.DefaultSubject),
+      connectTimeout = timeoutMs("connectTimeoutMs", OsciHttpTransport.DefaultConnectTimeout),
+      readTimeout    = timeoutMs("readTimeoutMs", OsciHttpTransport.DefaultReadTimeout)
     )
   }
 }

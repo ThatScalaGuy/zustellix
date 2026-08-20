@@ -3,6 +3,8 @@ package de.thatscalaguy.zustellix.osci
 import cats.effect.{Async, Resource}
 import de.thatscalaguy.zustellix.utils.cert.{CertAlias, CertManager, CertSource}
 
+import de.osci.osci12.extinterfaces.TransportI
+
 /** Our own mailbox at an OSCI intermediary — the asynchronous, passive
  *  recipient leg (e.g. XFamilie).
  *
@@ -34,12 +36,27 @@ trait OsciMailbox[F[_]] {
 
 object OsciMailbox {
 
+  /** Fetches over an [[OsciHttpTransport]] with the config's
+   *  `connectTimeout` / `readTimeout`; the `transport` overload swaps it for
+   *  a custom one.
+   */
   def resource[F[_]: Async](
       config:     OsciMailboxConfig,
       certSource: CertSource
   ): Resource[F, OsciMailbox[F]] =
+    resource(config, certSource, defaultTransport(config))
+
+  /** Same as the CertSource overload, but fetches over the given `transport`
+   *  instead of the default [[OsciHttpTransport]] (the config's timeouts then
+   *  do not apply — the transport owns its own settings).
+   */
+  def resource[F[_]: Async](
+      config:     OsciMailboxConfig,
+      certSource: CertSource,
+      transport:  TransportI
+  ): Resource[F, OsciMailbox[F]] =
     Resource.eval(internal.OsciBibBridge.originator[F](certSource)).map { originator =>
-      new internal.OsciMailboxBridgeImpl[F](originator, config)
+      new internal.OsciMailboxBridgeImpl[F](originator, config, transport)
     }
 
   /** Mailbox whose signing + decryption cert is resolved from the shared
@@ -51,8 +68,22 @@ object OsciMailbox {
       certs:  CertManager[F],
       alias:  CertAlias
   ): Resource[F, OsciMailbox[F]] =
+    resource(config, certs, alias, defaultTransport(config))
+
+  /** Same as the CertManager overload, but fetches over the given
+   *  `transport` instead of the default [[OsciHttpTransport]].
+   */
+  def resource[F[_]: Async](
+      config:    OsciMailboxConfig,
+      certs:     CertManager[F],
+      alias:     CertAlias,
+      transport: TransportI
+  ): Resource[F, OsciMailbox[F]] =
     for {
       cred       <- Resource.eval(certs.resolve(alias))
       originator <- Resource.eval(internal.OsciBibBridge.originator[F](cred))
-    } yield new internal.OsciMailboxBridgeImpl[F](originator, config)
+    } yield new internal.OsciMailboxBridgeImpl[F](originator, config, transport)
+
+  private def defaultTransport(config: OsciMailboxConfig): TransportI =
+    new OsciHttpTransport(config.connectTimeout, config.readTimeout)
 }
