@@ -526,6 +526,44 @@ the intermediary after reception (subject to its retention policy).
 One mailbox can serve several profiles; filter on `PendingDelivery.subject`
 client-side if you need to split them.
 
+### Content signature verification
+
+Received content — synchronous `request` answers and mailbox `fetch`
+deliveries — is checked for the author's content signature
+(Inhaltsdatensignatur) after decryption. The dialog-level checks of
+osci-bibliothek only cover the intermediary envelope signature; the content
+signature is what actually proves the author of the payload.
+
+An **invalid** signature always raises `OsciError.InvalidContentSignature`,
+regardless of configuration. What happens for content that carries **no**
+signature at all is configurable per client/mailbox:
+
+```scala
+val osciConfig = OsciConfig(
+  tenantId          = TenantId("flensburg"),
+  certSource        = Some(cert),
+  contentSignatures = ContentSignaturePolicy.Require   // default: Warn
+)
+
+val mailboxConfig = OsciMailboxConfig(
+  intermedUri        = URI.create("https://intermed.example/osci-manager"),
+  intermedCipherCert = intermedCert,
+  contentSignatures  = ContentSignaturePolicy.Require  // default: Warn
+)
+```
+
+- `ContentSignaturePolicy.Warn` (default): unsigned content is accepted and
+  surfaced as `ContentSignatureStatus.Unsigned` — on `OsciMessage.signature`
+  for mailbox fetches and on `Laufzettel.contentSignature` for `request`
+  responses. Some gateways answer unsigned (the condition feedback code
+  `3802` warns about), which is why this is the default.
+- `ContentSignaturePolicy.Require`: unsigned content raises
+  `OsciError.UnsignedContent`.
+
+Fully verified content yields `ContentSignatureStatus.Valid`. The check
+verifies the signatures cryptographically against the certificates embedded
+in the message; certificate chain/trust validation stays with the caller.
+
 ### HTTP timeouts and custom transport
 
 All wire operations go through an `OsciHttpTransport` — a drop-in for
@@ -605,6 +643,7 @@ tenant.flensburg.serviceUri       = http://www.osci.de/xmeld2605/xmeld2605Person
 tenant.flensburg.subject          = XMeld
 tenant.flensburg.connectTimeoutMs = 5000
 tenant.flensburg.readTimeoutMs    = 60000
+tenant.flensburg.contentSignatures = require
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -614,7 +653,8 @@ tenant.kiel.cert.password = optional-key-password
 
 (`serviceUri` and `subject` are optional and default to the XMeld
 Personensuche WSDL and `XMeld`; `connectTimeoutMs` / `readTimeoutMs` are
-optional and default to 10 s / 120 s.)
+optional and default to 10 s / 120 s; `contentSignatures` is optional —
+`require` or `warn`, default `warn`.)
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
 per tenant cert/intermediary.
@@ -640,9 +680,9 @@ OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 ### Laufzettel
 
 Each `request` / `send` produces a `Laufzettel(messageId, timestamp,
-recipientAgs, recipientUri, status, rawXml, warnings)` handed to a
-`LaufzettelSink[F]` (for `send`, `rawXml` is empty — there is no response
-payload at store time):
+recipientAgs, recipientUri, status, rawXml, warnings, contentSignature)`
+handed to a `LaufzettelSink[F]` (for `send`, `rawXml` is empty and
+`contentSignature` is `None` — there is no response payload at store time):
 
 ```scala
 LaufzettelSink.console[IO]   // prints a one-line summary
@@ -681,6 +721,8 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
+| `UnsignedContent`      | received content carries no content signature and `contentSignatures = Require` |
+| `InvalidContentSignature` | the content signature on received content failed verification (raised regardless of policy) |
 | `Certificate`          | cert / key decoding failure |
 | `Config`               | bad configuration (invalid URI, unknown cert type, …) |
 
@@ -700,7 +742,9 @@ row fails too. A common warning is `3802` ("Signatur des Empfängers über die
 Annahme- bzw. Bearbeitungsantwort fehlt"): the recipient's gateway answered
 without signing its response. The response payload is still delivered — only
 the cryptographic proof over the recipient's answer is missing, which the
-`warnings` list lets you log or escalate per your own policy.
+`warnings` list lets you log or escalate per your own policy. The author's
+signature over the content itself is verified separately — see
+[Content signature verification](#content-signature-verification).
 
 ---
 

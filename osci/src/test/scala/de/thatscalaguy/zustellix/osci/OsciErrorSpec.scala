@@ -47,6 +47,18 @@ class OsciErrorSpec extends FunSuite {
     assert(e.getMessage.contains("msg-42"))
   }
 
+  test("UnsignedContent carries the messageId when one is known") {
+    assertEquals(OsciError.UnsignedContent().messageId, None)
+    assertEquals(OsciError.UnsignedContent(Some("msg-1")).messageId, Some("msg-1"))
+  }
+
+  test("InvalidContentSignature preserves the cause") {
+    val cause = new Exception("digest mismatch")
+    val e     = OsciError.InvalidContentSignature(Some("msg-1"), cause)
+    assertEquals(e.getCause, cause)
+    assertEquals(e.messageId, Some("msg-1"))
+  }
+
   test("All variants are OsciError subtypes") {
     val errs: List[OsciError] = List(
       OsciError.UnknownTenant(TenantId("x")),
@@ -55,6 +67,8 @@ class OsciErrorSpec extends FunSuite {
       OsciError.OsciTransport(new IOException("x")),
       OsciError.OsciResponse("c", "d"),
       OsciError.NoSuchMessage("m"),
+      OsciError.UnsignedContent(),
+      OsciError.InvalidContentSignature(),
       OsciError.Certificate(new Exception("c")),
       OsciError.Config("r")
     )

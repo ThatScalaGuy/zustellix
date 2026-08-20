@@ -1,10 +1,16 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.{OsciError, OsciFeedback}
+import de.thatscalaguy.zustellix.osci.{
+  ContentSignaturePolicy,
+  ContentSignatureStatus,
+  OsciError,
+  OsciFeedback
+}
 import munit.FunSuite
 
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
 import de.osci.osci12.roles.Originator
+import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
 import java.math.BigInteger
 import java.security.cert.X509Certificate
@@ -41,6 +47,16 @@ class OsciBibSupportSpec extends FunSuite {
   }
 
   private lazy val role = new Originator(cert, cert)
+
+  /** A signing-capable role over the test PKCS12 (same fixture the bridges
+   *  use in production) — needed to actually sign / decrypt containers.
+   */
+  private lazy val signingRole: Originator = {
+    java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
+    def p12 = getClass.getClassLoader.getResourceAsStream("test-cert.p12")
+    new Originator(new PKCS12Signer(p12, "test"), new PKCS12Decrypter(p12, "test"))
+  }
+
 
   // OSCI feedback rows are [lang, code, text]. OSCI 1.2 code classes:
   // "0xxx" = success, "3xxx" = warning (request executed), "9xxx" = error.
@@ -162,20 +178,99 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(firstContentData(List(new ContentContainer())), None)
   }
 
-  test("extractXml prefers a plaintext container and never touches the encrypted entries") {
+  test("extractVerifiedXml prefers a plaintext container and never touches the encrypted entries") {
     val cc = new ContentContainer()
     cc.addContent(new Content("<xml>plain</xml>"))
     // A decrypt attempt on this bogus entry would throw — proving it is not touched.
-    val out = extractXml(Array(cc), Array.empty[EncryptedDataOSCI], role)
-    assertEquals(out, Some("<xml>plain</xml>"))
+    val out = extractVerifiedXml(
+      Array(cc), Array.empty[EncryptedDataOSCI], role, ContentSignaturePolicy.Warn, None
+    )
+    assertEquals(out, Some(("<xml>plain</xml>", ContentSignatureStatus.Unsigned)))
   }
 
-  test("extractXml tolerates null arrays and yields None") {
-    assertEquals(extractXml(null, null, role), None)
+  test("extractVerifiedXml tolerates null arrays and yields None") {
+    assertEquals(extractVerifiedXml(null, null, role, ContentSignaturePolicy.Require, None), None)
   }
 
-  test("extractXml yields None when nothing carries content") {
-    assertEquals(extractXml(Array(new ContentContainer()), Array.empty[EncryptedDataOSCI], role), None)
+  test("extractVerifiedXml yields None when nothing carries content") {
+    assertEquals(
+      extractVerifiedXml(
+        Array(new ContentContainer()), Array.empty[EncryptedDataOSCI], role,
+        ContentSignaturePolicy.Require, None
+      ),
+      None
+    )
+  }
+
+  test("extractVerifiedXml: a signed container verifies as Valid under Require") {
+    val cc = new ContentContainer()
+    cc.addContent(new Content("<xml>signed</xml>"))
+    cc.sign(signingRole)
+    val out = extractVerifiedXml(
+      Array(cc), Array.empty[EncryptedDataOSCI], signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>signed</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml: unsigned content under Require raises UnsignedContent with the messageId") {
+    val cc = new ContentContainer()
+    cc.addContent(new Content("<xml>plain</xml>"))
+    val e = intercept[OsciError.UnsignedContent] {
+      extractVerifiedXml(
+        Array(cc), Array.empty[EncryptedDataOSCI], role,
+        ContentSignaturePolicy.Require, Some("msg-7")
+      )
+    }
+    assertEquals(e.messageId, Some("msg-7"))
+  }
+
+  test("extractVerifiedXml verifies the signature of a decrypted container") {
+    // Decrypting a self-built EncryptedDataOSCI needs a wire roundtrip (the
+    // encrypted keys only land in the EncryptedData on serialization), so
+    // decrypt is stubbed to return the signed container — what matters here
+    // is that the encrypted branch runs the same verification.
+    val signed = new ContentContainer()
+    signed.addContent(new Content("<xml>e2e</xml>"))
+    signed.sign(signingRole)
+    val enc = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer = signed
+    }
+    val out = extractVerifiedXml(
+      null, Array[EncryptedDataOSCI](enc), signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml: a corrupted signature raises InvalidContentSignature") {
+    val cc = new ContentContainer()
+    cc.addContent(new Content("<xml>original</xml>"))
+    cc.sign(signingRole)
+    val sig = cc.getSignatures()(0)
+    sig.signatureValue(0) = (sig.signatureValue(0) ^ 0xff).toByte
+    val e = intercept[OsciError.InvalidContentSignature] {
+      extractVerifiedXml(
+        Array(cc), Array.empty[EncryptedDataOSCI], signingRole,
+        ContentSignaturePolicy.Warn, Some("msg-8")
+      )
+    }
+    assertEquals(e.messageId, Some("msg-8"))
+  }
+
+  test("verifyContentSignature: unsigned + Warn yields Unsigned, signed yields Valid") {
+    val unsigned = new ContentContainer()
+    unsigned.addContent(new Content("<a/>"))
+    assertEquals(
+      verifyContentSignature(unsigned, ContentSignaturePolicy.Warn, None),
+      ContentSignatureStatus.Unsigned
+    )
+
+    val signed = new ContentContainer()
+    signed.addContent(new Content("<a/>"))
+    signed.sign(signingRole)
+    assertEquals(
+      verifyContentSignature(signed, ContentSignaturePolicy.Require, None),
+      ContentSignatureStatus.Valid
+    )
   }
 
   test("parseInstant handles the offset xsd:dateTime form") {

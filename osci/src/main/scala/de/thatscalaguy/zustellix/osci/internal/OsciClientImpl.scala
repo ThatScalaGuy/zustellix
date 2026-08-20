@@ -35,7 +35,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                   recipientUri = route.addresseeUri,
                   status       = result.status,
                   rawXml       = result.responseXml,
-                  warnings     = result.warnings
+                  warnings     = result.warnings,
+                  contentSignature = result.signature
                 )
       _      <- sink.record(tenantId, lz).attempt.void
     }
@@ -91,7 +92,9 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
 
   private def failureMessageId(e: Throwable): String =
     e match {
-      case OsciError.OsciResponse(_, _, Some(id)) => id
-      case _                                      => ""
+      case OsciError.OsciResponse(_, _, Some(id))         => id
+      case OsciError.UnsignedContent(Some(id))            => id
+      case OsciError.InvalidContentSignature(Some(id), _) => id
+      case _                                              => ""
     }
 }

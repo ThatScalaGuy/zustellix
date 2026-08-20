@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.{OsciFeedback, OsciReceipt}
+import de.thatscalaguy.zustellix.osci.{ContentSignatureStatus, OsciFeedback, OsciReceipt}
 
 import java.net.URI
 import java.security.cert.X509Certificate
@@ -22,12 +22,16 @@ final case class OsciRoute(
     intermedCipher:  X509Certificate
 )
 
-/** Raw OSCI transmission result, before being mapped into a domain Laufzettel. */
+/** Raw OSCI transmission result, before being mapped into a domain Laufzettel.
+ *  `signature` is the verified content-signature status of `responseXml`
+ *  (`None` when the response carried no content to check).
+ */
 final case class OsciRawResult(
     responseXml: String,
     messageId:   String,
     status:      String,
-    warnings:    List[OsciFeedback] = Nil
+    warnings:    List[OsciFeedback] = Nil,
+    signature:   Option[ContentSignatureStatus] = None
 )
 
 /** Narrow mockable seam over the Governikus osci-bibliothek Java library for

@@ -66,15 +66,21 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
         val rsp = fd.send()
         checkFeedback(rsp.getFeedback)
 
-        val xml = extractXml(rsp.getContentContainer, rsp.getEncryptedData, originator)
-          .getOrElse(throw OsciError.NoSuchMessage(messageId))
+        val (xml, signature) = extractVerifiedXml(
+          rsp.getContentContainer,
+          rsp.getEncryptedData,
+          originator,
+          config.contentSignatures,
+          Some(messageId)
+        ).getOrElse(throw OsciError.NoSuchMessage(messageId))
 
         OsciMessage(
           messageId = Option(rsp.getMessageId).getOrElse(messageId),
           subject   = Option(rsp.getSubject),
           xml       = xml,
           creation  = parseTimestamp(rsp.getTimestampCreation),
-          reception = Option(rsp.getProcessCardBundle).flatMap(pc => parseTimestamp(pc.getReception))
+          reception = Option(rsp.getProcessCardBundle).flatMap(pc => parseTimestamp(pc.getReception)),
+          signature = signature
         )
       }
       catch {

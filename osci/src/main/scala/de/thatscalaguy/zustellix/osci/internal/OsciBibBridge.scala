@@ -2,7 +2,7 @@ package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.{Resource, Sync}
 import de.thatscalaguy.zustellix.utils.cert.{CertCredential, CertSource}
-import de.thatscalaguy.zustellix.osci.{OsciError, OsciReceipt}
+import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciReceipt}
 
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
@@ -25,18 +25,22 @@ private[osci] object OsciBibBridge {
 
   def resource[F[_]: Sync](
       certSource: CertSource,
-      transport:  TransportI
+      transport:  TransportI,
+      contentSignatures: ContentSignaturePolicy
   ): Resource[F, OsciTransport[F]] =
-    Resource.eval(originator[F](certSource)).map(new OsciBibBridgeImpl[F](_, transport))
+    Resource.eval(originator[F](certSource))
+      .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
 
   /** Alias-keyed path: the same PKCS12 the DVDV client uses, supplied by the
    *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes.
    */
   def resource[F[_]: Sync](
       cred:      CertCredential,
-      transport: TransportI
+      transport: TransportI,
+      contentSignatures: ContentSignaturePolicy
   ): Resource[F, OsciTransport[F]] =
-    Resource.eval(originator[F](cred)).map(new OsciBibBridgeImpl[F](_, transport))
+    Resource.eval(originator[F](cred))
+      .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
 
   /** Our own OSCI role: signer + decrypter from the tenant's PKCS12. Also
    *  used by the mailbox bridge, where the same role fetches and decrypts
@@ -89,7 +93,8 @@ private[osci] object OsciBibBridge {
 
 private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
     originator: Originator,
-    transport: TransportI
+    transport: TransportI,
+    contentSignatures: ContentSignaturePolicy
 ) extends OsciTransport[F] {
 
   import OsciBibSupport.*
@@ -120,15 +125,24 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         try new ExitDialog(dialog).send()
         catch case _: Throwable => () // best-effort cleanup
 
+        // The synchronous answer comes back encrypted to our cipher cert
+        // (the OSCI roles swap: our Originator becomes the response's
+        // Addressee), so extractVerifiedXml decrypts with our own role and
+        // then checks the author's content signature.
+        val verified = extractVerifiedXml(
+          rsp.getContentContainer,
+          rsp.getEncryptedData,
+          originator,
+          contentSignatures,
+          Option(msgIdResp.getMessageId)
+        )
+
         OsciRawResult(
-          // The synchronous answer comes back encrypted to our cipher cert
-          // (the OSCI roles swap: our Originator becomes the response's
-          // Addressee), so extractXml decrypts with our own role.
-          responseXml = extractXml(rsp.getContentContainer, rsp.getEncryptedData, originator)
-            .getOrElse(""),
-          messageId = msgIdResp.getMessageId,
-          status    = topFeedbackCode(rsp.getFeedback),
-          warnings  = feedbackWarnings(rsp.getFeedback)
+          responseXml = verified.map(_._1).getOrElse(""),
+          messageId   = msgIdResp.getMessageId,
+          status      = topFeedbackCode(rsp.getFeedback),
+          warnings    = feedbackWarnings(rsp.getFeedback),
+          signature   = verified.map(_._2)
         )
       }
       catch {

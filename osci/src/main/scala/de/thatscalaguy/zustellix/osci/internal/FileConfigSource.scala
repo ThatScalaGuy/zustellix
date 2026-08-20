@@ -21,6 +21,7 @@ import scala.jdk.CollectionConverters.*
  *   tenant.<id>.subject                = <osci subject>      (optional)
  *   tenant.<id>.connectTimeoutMs       = <millis>            (optional)
  *   tenant.<id>.readTimeoutMs          = <millis>            (optional)
+ *   tenant.<id>.contentSignatures      = require | warn      (optional, default warn)
  * }}}
  *
  *  The intermediary is no longer configured here — it is resolved per send
@@ -76,13 +77,26 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
         )
       }
 
+    val contentSignatures =
+      kv.get("contentSignatures").fold(ContentSignaturePolicy.Warn) { v =>
+        v.trim.toLowerCase match {
+          case "require" => ContentSignaturePolicy.Require
+          case "warn"    => ContentSignaturePolicy.Warn
+          case other =>
+            throw OsciError.Config(
+              s"tenant.$id.contentSignatures must be 'require' or 'warn', got '$other'"
+            )
+        }
+      }
+
     OsciConfig(
       tenantId       = TenantId(id),
       certSource     = Some(certSource),
       serviceUri     = kv.getOrElse("serviceUri", OsciConfig.DefaultXMeldServiceUri),
       subject        = kv.getOrElse("subject", OsciConfig.DefaultSubject),
       connectTimeout = timeoutMs("connectTimeoutMs", OsciHttpTransport.DefaultConnectTimeout),
-      readTimeout    = timeoutMs("readTimeoutMs", OsciHttpTransport.DefaultReadTimeout)
+      readTimeout    = timeoutMs("readTimeoutMs", OsciHttpTransport.DefaultReadTimeout),
+      contentSignatures = contentSignatures
     )
   }
 }

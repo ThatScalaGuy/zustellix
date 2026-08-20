@@ -14,6 +14,10 @@ import scala.concurrent.duration.FiniteDuration
  *  `connectTimeout` / `readTimeout` bound the default [[OsciHttpTransport]]'s
  *  `HttpURLConnection`s; they are ignored when a custom transport is passed
  *  to `OsciClient.resource`.
+ *
+ *  `contentSignatures` sets how strictly the author's content signature on
+ *  received response content (synchronous `request` answers) is enforced —
+ *  see [[ContentSignaturePolicy]].
  */
 final case class OsciConfig(
     tenantId: TenantId,
@@ -25,7 +29,8 @@ final case class OsciConfig(
     serviceUri: String = OsciConfig.DefaultXMeldServiceUri,
     subject: String = OsciConfig.DefaultSubject,
     connectTimeout: FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
-    readTimeout: FiniteDuration = OsciHttpTransport.DefaultReadTimeout
+    readTimeout: FiniteDuration = OsciHttpTransport.DefaultReadTimeout,
+    contentSignatures: ContentSignaturePolicy = ContentSignaturePolicy.Warn
 )
 
 object OsciConfig {

@@ -1,6 +1,11 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import de.thatscalaguy.zustellix.osci.{OsciError, OsciFeedback}
+import de.thatscalaguy.zustellix.osci.{
+  ContentSignaturePolicy,
+  ContentSignatureStatus,
+  OsciError,
+  OsciFeedback
+}
 
 import de.osci.osci12.OSCIException
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
@@ -56,25 +61,61 @@ private[osci] object OsciBibSupport {
     Option(fb).map(_.toList).getOrElse(Nil).filter(_ != null)
 
   def firstContentData(ccs: List[ContentContainer]): Option[String] =
-    ccs.iterator
-      .flatMap(cc => Option(cc.getContents).map(_.toList).getOrElse(Nil))
-      .map(_.getContentData)
-      .find(s => s != null && s.nonEmpty)
+    firstContent(ccs).map(_._2)
 
-  /** Content data of a received message: plaintext containers are tried
-   *  first, then the `EncryptedDataOSCI` entries are decrypted with
-   *  `decryptWith` (the role carrying our own Decrypter — payloads addressed
-   *  to us are encrypted to our cipher cert).
+  /** The first non-empty content payload, together with the container that
+   *  carries it — the container is what the content signature covers.
    */
-  def extractXml(
+  private def firstContent(ccs: List[ContentContainer]): Option[(ContentContainer, String)] =
+    ccs.iterator
+      .flatMap { cc =>
+        Option(cc.getContents).map(_.toList).getOrElse(Nil).map(c => (cc, c.getContentData))
+      }
+      .find { case (_, s) => s != null && s.nonEmpty }
+
+  /** Content data of a received message, with its content signature verified:
+   *  plaintext containers are tried first, then the `EncryptedDataOSCI`
+   *  entries are decrypted with `decryptWith` (the role carrying our own
+   *  Decrypter — payloads addressed to us are encrypted to our cipher cert).
+   *  The container the returned xml came from is checked via
+   *  [[verifyContentSignature]] — the dialog default only verifies the
+   *  intermediary envelope signature, not the author's content signature.
+   */
+  def extractVerifiedXml(
       plain:       Array[ContentContainer],
       encrypted:   Array[EncryptedDataOSCI],
-      decryptWith: Role
-  ): Option[String] =
-    firstContentData(Option(plain).map(_.toList).getOrElse(Nil)).orElse {
-      val enc       = Option(encrypted).map(_.toList).getOrElse(Nil)
-      val decrypted = enc.flatMap(e => Option(e.decrypt(decryptWith)))
-      firstContentData(decrypted)
+      decryptWith: Role,
+      policy:      ContentSignaturePolicy,
+      messageId:   Option[String]
+  ): Option[(String, ContentSignatureStatus)] =
+    firstContent(Option(plain).map(_.toList).getOrElse(Nil))
+      .orElse {
+        val enc = Option(encrypted).map(_.toList).getOrElse(Nil)
+        firstContent(enc.flatMap(e => Option(e.decrypt(decryptWith))))
+      }
+      .map { case (cc, xml) => (xml, verifyContentSignature(cc, policy, messageId)) }
+
+  /** `ContentContainer.checkAllSignatures()` over the container the returned
+   *  content came from. An invalid (or uncheckable) signature always raises;
+   *  the policy only decides whether *unsigned* content raises or is
+   *  surfaced as [[ContentSignatureStatus.Unsigned]].
+   */
+  def verifyContentSignature(
+      cc:        ContentContainer,
+      policy:    ContentSignaturePolicy,
+      messageId: Option[String]
+  ): ContentSignatureStatus =
+    if Option(cc.getSigners).forall(_.isEmpty) then
+      policy match {
+        case ContentSignaturePolicy.Require => throw OsciError.UnsignedContent(messageId)
+        case ContentSignaturePolicy.Warn    => ContentSignatureStatus.Unsigned
+      }
+    else {
+      val ok =
+        try cc.checkAllSignatures()
+        catch case e: Exception => throw OsciError.InvalidContentSignature(messageId, e)
+      if !ok then throw OsciError.InvalidContentSignature(messageId)
+      ContentSignatureStatus.Valid
     }
 
   /** OSCI content-data profile (XMeld, XFamilie, ...): the Inhaltsdaten must
