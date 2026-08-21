@@ -7,7 +7,7 @@ import io.circe.parser.parse
 import munit.CatsEffectSuite
 import org.http4s.implicits.uri
 import pdi.jwt.algorithms.JwtAsymmetricAlgorithm
-import pdi.jwt.{Jwt, JwtAlgorithm}
+import pdi.jwt.{Jwt, JwtAlgorithm, JwtOptions}
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
@@ -27,10 +27,12 @@ class JwtFactorySpec extends CatsEffectSuite {
     jwtLifetime = 60.seconds
   )
 
+  private val tokenEp = cfg.tokenUriFor(cfg.baseUri)
+
   test("produces a JWT verifiable with the cert's public key and has sub=fp:<fingerprint>") {
     for {
       loaded <- CertLoader.load[IO](cfg.certSource.get)
-      token  <- JwtFactory.make[IO](cfg, loaded)
+      token  <- JwtFactory.make[IO](cfg, loaded, tokenEp)
       decoded = Jwt.decode(token, loaded.certificate.getPublicKey, Seq(JwtAlgorithm.RS256))
     } yield {
       assert(decoded.isSuccess, s"JWT verification failed: $decoded")
@@ -39,7 +41,7 @@ class JwtFactorySpec extends CatsEffectSuite {
       val expectedSub = s"fp:${loaded.fingerprintSha1Hex}"
       assertEquals(payload("sub").flatMap(_.asString), Some(expectedSub))
       assertEquals(payload("iss").flatMap(_.asString), Some(expectedSub))
-      assertEquals(payload("aud").flatMap(_.asString), Some(cfg.tokenUri.renderString))
+      assertEquals(payload("aud").flatMap(_.asString), Some(tokenEp.renderString))
       assert(claim.issuedAt.isDefined)
       assert(claim.notBefore.isDefined)
       assertEquals(claim.notBefore, claim.issuedAt)
@@ -47,6 +49,29 @@ class JwtFactorySpec extends CatsEffectSuite {
       assertEquals(claim.expiration.get - claim.issuedAt.get, 60L)
       assert(claim.jwtId.isDefined)
     }
+  }
+
+  private def audOf(token: String): Option[String] =
+    parse(Jwt.decode(token, JwtOptions(signature = false)).get.content).toOption
+      .flatMap(_.asObject)
+      .flatMap(_("aud"))
+      .flatMap(_.asString)
+
+  test("aud defaults to the token endpoint actually contacted") {
+    val backupEp = uri"https://backup.example/extern/standaloneauth/token"
+    for {
+      loaded <- CertLoader.load[IO](cfg.certSource.get)
+      token  <- JwtFactory.make[IO](cfg, loaded, backupEp)
+    } yield assertEquals(audOf(token), Some(backupEp.renderString))
+  }
+
+  test("jwtAudience pins aud regardless of the contacted endpoint") {
+    val pinned   = cfg.copy(jwtAudience = Some("urn:dvdv:pinned"))
+    val backupEp = uri"https://backup.example/extern/standaloneauth/token"
+    for {
+      loaded <- CertLoader.load[IO](pinned.certSource.get)
+      token  <- JwtFactory.make[IO](pinned, loaded, backupEp)
+    } yield assertEquals(audOf(token), Some("urn:dvdv:pinned"))
   }
 
   // In-JVM EC PKCS12 keystore for the given curve + cert signature algorithm. No binary fixtures shipped.
@@ -77,7 +102,7 @@ class JwtFactorySpec extends CatsEffectSuite {
     for {
       bytes  <- IO(ecPkcs12(curve, sigAlg))
       loaded <- CertLoader.loadPkcs12Bytes[IO](bytes, "pw")
-      token  <- JwtFactory.make[IO](cfg, loaded)
+      token  <- JwtFactory.make[IO](cfg, loaded, tokenEp)
     } yield {
       val decoded = Jwt.decode(token, loaded.certificate.getPublicKey, Seq(expected))
       assert(decoded.isSuccess, s"$curve JWT verification with $expected failed: $decoded")

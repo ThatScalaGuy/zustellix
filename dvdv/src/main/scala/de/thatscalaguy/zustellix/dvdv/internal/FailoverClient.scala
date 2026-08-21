@@ -25,11 +25,28 @@ object FailoverClient {
 
   private final case class State(activeIndex: Int, nextRecoverAt: Option[FiniteDuration])
 
+  /** The failover middleware plus a view of its routing state.
+   *
+   *  `activeServer` is the sticky active server new requests are routed to
+   *  first (index 0 = the primary). It lets callers derive per-server values —
+   *  e.g. the token endpoint a POST will be addressed at — that follow
+   *  failover and recovery.
+   */
+  final case class Handle[F[_]](
+      middleware: Client[F] => Client[F],
+      activeServer: F[Uri]
+  )
+
   def make[F[_]: Async](
       servers: NonEmptyList[Uri],
       recoverAfter: FiniteDuration
-  ): F[Client[F] => Client[F]] =
-    Ref.of[F, State](State(0, None)).map(state => underlying => build(servers, recoverAfter, state)(underlying))
+  ): F[Handle[F]] =
+    Ref.of[F, State](State(0, None)).map { state =>
+      Handle(
+        underlying => build(servers, recoverAfter, state)(underlying),
+        state.get.map(s => servers.toList(s.activeIndex))
+      )
+    }
 
   /** Permutation that puts the active server first, then the remaining servers
    *  in their normal order. During a recovery attempt the natural order is used.

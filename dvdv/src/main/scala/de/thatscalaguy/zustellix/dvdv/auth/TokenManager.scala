@@ -8,7 +8,7 @@ import de.thatscalaguy.zustellix.dvdv.model.AccessTokenResponse
 import de.thatscalaguy.zustellix.dvdv.{DvdvConfig, DvdvError}
 import de.thatscalaguy.zustellix.dvdv.model.Problem
 import io.circe.parser.decode
-import org.http4s.{Method, Request, Status, UrlForm}
+import org.http4s.{Method, Request, Status, Uri, UrlForm}
 import org.http4s.client.Client
 import org.http4s.headers.`Content-Type`
 import org.http4s.MediaType
@@ -33,21 +33,27 @@ object TokenManager {
    *  so a rotated signing cert — e.g. from a hot-reloading `CertManager` — is
    *  picked up without rebuilding the client. Pass a pure/memoized value for a
    *  cert that is fixed for the lifetime of the manager.
+   *
+   *  `tokenEndpoint` is likewise evaluated once per token acquisition, so a
+   *  failed-over active server flows into both the wire target of the POST and
+   *  the `aud` claim of the `client_assertion` on the next refresh.
    */
   def make[F[_]: Async](
       client: Client[F],
       config: DvdvConfig,
-      resolve: F[LoadedCert]
+      resolve: F[LoadedCert],
+      tokenEndpoint: F[Uri]
   ): F[TokenManager[F]] =
     for {
       ref   <- Ref.of[F, Option[CachedToken]](None)
       mutex <- Mutex[F]
-    } yield new Impl[F](client, config, resolve, ref, mutex)
+    } yield new Impl[F](client, config, resolve, tokenEndpoint, ref, mutex)
 
   private final class Impl[F[_]: Async](
       client: Client[F],
       config: DvdvConfig,
       resolve: F[LoadedCert],
+      tokenEndpoint: F[Uri],
       state: Ref[F, Option[CachedToken]],
       mutex: Mutex[F]
   ) extends TokenManager[F] {
@@ -84,14 +90,15 @@ object TokenManager {
 
     private def acquire(now: Instant): F[CachedToken] =
       for {
-        loaded <- resolve
-        jwt    <- JwtFactory.make[F](config, loaded)
+        loaded   <- resolve
+        endpoint <- tokenEndpoint
+        jwt      <- JwtFactory.make[F](config, loaded, endpoint)
         form = UrlForm(
                  "grant_type"            -> "client_credentials",
                  "client_assertion_type" -> "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                  "client_assertion"      -> jwt
                )
-        req  = Request[F](Method.POST, config.tokenUri)
+        req  = Request[F](Method.POST, endpoint)
                  .withEntity(form)
                  .putHeaders(`Content-Type`(MediaType.application.`x-www-form-urlencoded`))
         token <- client.run(req).use { resp =>

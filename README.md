@@ -320,7 +320,8 @@ val config = DvdvConfig(
                                       // omit entirely when using CertManager + CertAlias
 
   issuer           = None,            // JWT iss; defaults to "fp:<sha1-fingerprint>"
-  audience         = None,            // token URI; defaults to baseUri/extern/standaloneauth/token
+  tokenEndpoint    = None,            // explicit token POST target; defaults to <active server>/extern/standaloneauth/token
+  jwtAudience      = None,            // JWT aud claim; defaults to the token endpoint actually contacted (follows failover)
   jwtLifetime      = 60.seconds,      // client_assertion lifetime
   tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry
   requestTimeout   = 30.seconds,

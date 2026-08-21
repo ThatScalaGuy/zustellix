@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{Async, Resource, Sync}
+import cats.syntax.functor.*
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
 import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
@@ -113,8 +114,14 @@ object DvdvClient {
       resolve: F[LoadedCert]
   ): Resource[F, DvdvClient[F]] =
     for {
-      failover <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter)).map(_(http))
-      tokenMgr <- Resource.eval(TokenManager.make[F](failover, config, resolve))
+      handle   <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter))
+      failover  = handle.middleware(http)
+      tokenEp   = handle.activeServer.map(config.tokenUriFor)
+      // An explicit tokenEndpoint is an exact wire target — routing it through
+      // the failover middleware would rewrite its authority to a directory
+      // server, so token POSTs go straight to the underlying client instead.
+      tokenHttp = if (config.tokenEndpoint.isDefined) http else failover
+      tokenMgr <- Resource.eval(TokenManager.make[F](tokenHttp, config, resolve, tokenEp))
       authed    = AuthMiddleware(tokenMgr)(failover)
       raw       = HttpDvdvClient[F](authed, config)
       cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
