@@ -37,8 +37,8 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
     }
     val c = client(routes)
     for {
-      hit <- c.findAuthorityDescription("Cat", "key-1")
-      miss <- c.findAuthorityDescription("Cat", "none")
+      hit <- c.findAuthorityDescription(Category.unsafe("Cat"), OrganizationKey.unsafe("key-01"))
+      miss <- c.findAuthorityDescription(Category.unsafe("none"), OrganizationKey.unsafe("key-01"))
     } yield {
       assert(hit.isDefined)
       assertEquals(miss, None)
@@ -50,7 +50,26 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findCertificateByFingerprint" :? _ =>
         NotFound()
     }
-    client(routes).findCertificateByFingerprint("deadbeef").map(r => assertEquals(r, None))
+    client(routes)
+      .findCertificateByFingerprint(Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2"))
+      .map(r => assertEquals(r, None))
+  }
+
+  test("findCertificateByFingerprint sends the normalized fingerprint in request_json") {
+    val seen = Ref.unsafe[IO, Option[String]](None)
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findCertificateByFingerprint" :? RequestJsonQ(json) =>
+        seen.set(Some(json)) *> NotFound()
+    }
+    val colonUpper = "02:72:C5:6C:97:42:A6:25:01:32:9A:3A:A7:89:74:F1:60:5C:92:A2"
+    for {
+      _    <- client(routes).findCertificateByFingerprint(Fingerprint.unsafe(colonUpper))
+      json <- seen.get.map(_.getOrElse(fail("request_json not captured")))
+    } yield {
+      assert(json.contains("0272c56c9742a62501329a3aa78974f1605c92a2"))
+      assert(!json.contains(":7"), s"colons must be stripped: $json")
+      assert(!json.contains("C5"), s"hex must be lowercased: $json")
+    }
   }
 
   test("verifyCategory returns true") {
@@ -58,7 +77,12 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "verifycategory" :? _ =>
         Ok(VerificationResult(true).asJson)
     }
-    client(routes).verifyCategory("fp", "cat").map(r => assertEquals(r, VerificationResult(true)))
+    client(routes)
+      .verifyCategory(
+        Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2"),
+        Category.unsafe("cat")
+      )
+      .map(r => assertEquals(r, VerificationResult(true)))
   }
 
   test("batchVerifyCategory posts a JSON array and decodes a list") {
@@ -84,7 +108,7 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findServiceSpecificationUrisByCategory" :? RequestJsonQ(_) =>
         Ok(List("u1", "u2").asJson)
     }
-    client(routes).findServiceSpecificationUrisByCategory("cat").map { r =>
+    client(routes).findServiceSpecificationUrisByCategory(Category.unsafe("cat")).map { r =>
       assertEquals(r, List("u1", "u2"))
     }
   }
@@ -97,6 +121,26 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
     client(routes)
       .findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "01001000")
       .map(r => assertEquals(r.size, 1))
+  }
+
+  test("findOrganizationsByServiceElement with customServiceElementType sends the right request_json") {
+    val seen = Ref.unsafe[IO, Option[String]](None)
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findOrganizationsByServiceElement" :? RequestJsonQ(json) =>
+        seen.set(Some(json)) *> Ok(List(LightweightOrganization(id = Some(1L))).asJson)
+    }
+    for {
+      out  <- client(routes).findOrganizationsByServiceElement("MY_TYPE", ParameterType.URI, "01001000")
+      json <- seen.get.map(_.getOrElse(fail("request_json not captured")))
+      body <- IO.fromEither(io.circe.parser.parse(json))
+    } yield {
+      assertEquals(out.size, 1)
+      val obj = body.asObject.getOrElse(fail(s"not a JSON object: $json"))
+      assertEquals(obj("customServiceElementType").flatMap(_.asString), Some("MY_TYPE"))
+      assertEquals(obj("parameterType").flatMap(_.asString), Some("URI"))
+      assertEquals(obj("parameterValue").flatMap(_.asString), Some("01001000"))
+      assertEquals(obj("serviceElementType"), None)
+    }
   }
 
   test("batchFindAuthorityDescription decodes a JSON array of OrganizationDescription") {

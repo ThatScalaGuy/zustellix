@@ -28,4 +28,22 @@ object DvdvError {
 
   final case class TransportError(cause: Throwable)
       extends DvdvError(s"Transport error: ${cause.getMessage}", cause)
+
+  /** A string failed validation as a fingerprint — raised only by
+   *  the smart constructors, never by a lookup.
+   */
+  final case class InvalidFingerprint(input: String)
+      extends DvdvError(s"Invalid fingerprint '$input': expected 40 hex characters (colons and whitespace are stripped, case-insensitive)")
+
+  /** A string failed validation as an organization key — raised only
+   *  by the smart constructors, never by a lookup.
+   */
+  final case class InvalidOrganizationKey(input: String)
+      extends DvdvError(s"Invalid organization key '$input': expected 6 to 255 characters")
+
+  /** A string failed validation as a category — raised only by the
+   *  smart constructors, never by a lookup.
+   */
+  final case class InvalidCategory(input: String)
+      extends DvdvError(s"Invalid category '$input': expected 1 to 255 characters")
 }

@@ -34,6 +34,8 @@ class RevocationSpec extends CatsEffectSuite {
         Ok(cert.asJson)
     }
 
+  private val TestFp = Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2")
+
   private val revokedCert = Certificate(
     fingerprint      = Some("deadbeef"),
     revocationDate   = Some("2026-01-01T00:00:00Z"),
@@ -42,7 +44,7 @@ class RevocationSpec extends CatsEffectSuite {
 
   test("findCertificateByFingerprint raises CertificateRevoked for a revoked cert") {
     val c = client(routesReturning(revokedCert), config())
-    c.findCertificateByFingerprint("deadbeef").attempt.map {
+    c.findCertificateByFingerprint(TestFp).attempt.map {
       case Left(DvdvError.CertificateRevoked(date, reason)) =>
         assertEquals(date, Some("2026-01-01T00:00:00Z"))
         assertEquals(reason, Some(RevocationReason.KEY_COMPROMISE))
@@ -53,12 +55,12 @@ class RevocationSpec extends CatsEffectSuite {
 
   test("findCertificateByFingerprint returns the cert when ignoreRevocation = true") {
     val c = client(routesReturning(revokedCert), config(ignoreRevocation = true))
-    c.findCertificateByFingerprint("deadbeef").map(r => assertEquals(r, Some(revokedCert)))
+    c.findCertificateByFingerprint(TestFp).map(r => assertEquals(r, Some(revokedCert)))
   }
 
   test("findCertificateByFingerprint returns the cert when not revoked") {
     val cert = Certificate(fingerprint = Some("deadbeef"))
     val c    = client(routesReturning(cert), config())
-    c.findCertificateByFingerprint("deadbeef").map(r => assertEquals(r, Some(cert)))
+    c.findCertificateByFingerprint(TestFp).map(r => assertEquals(r, Some(cert)))
   }
 }

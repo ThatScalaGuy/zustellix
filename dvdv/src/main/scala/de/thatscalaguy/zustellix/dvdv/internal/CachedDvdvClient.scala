@@ -17,14 +17,14 @@ object CachedDvdvClient {
       for {
         categoriesC                          <- mkCache[F, Unit, List[DirectoryOrganizationCategoryLevel1DTO]](cfg.categoriesTtl)
         intermediariesC                      <- mkCache[F, Unit, List[SummaryServiceElementDTO]](cfg.intermediariesTtl)
-        certByFpC                            <- mkCache[F, String, Option[Certificate]](cfg.findCertificateByFingerprintTtl)
-        urisByCategoryC                      <- mkCache[F, String, List[String]](cfg.findServiceSpecificationUrisByCategoryTtl)
-        authDescriptionC                     <- mkCache[F, (String, String), Option[OrganizationDescription]](cfg.findAuthorityDescriptionTtl)
-        authDescriptionsC                    <- mkCache[F, String, List[OrganizationDescription]](cfg.findAuthorityDescriptionsTtl)
-        categoriesByFpKeyC                   <- mkCache[F, (String, String), List[String]](cfg.findCategoriesTtl)
-        serviceDescC                         <- mkCache[F, (String, String), Option[Service]](cfg.findServiceDescriptionTtl)
-        orgsByServiceElementC                <- mkCache[F, (ServiceElementType, ParameterType, String), List[LightweightOrganization]](cfg.findOrganizationsByServiceElementTtl)
-        verifyCategoryC                      <- mkCache[F, (String, String), VerificationResult](cfg.verifyCategoryTtl)
+        certByFpC                            <- mkCache[F, Fingerprint, Option[Certificate]](cfg.findCertificateByFingerprintTtl)
+        urisByCategoryC                      <- mkCache[F, Category, List[String]](cfg.findServiceSpecificationUrisByCategoryTtl)
+        authDescriptionC                     <- mkCache[F, (Category, OrganizationKey), Option[OrganizationDescription]](cfg.findAuthorityDescriptionTtl)
+        authDescriptionsC                    <- mkCache[F, OrganizationKey, List[OrganizationDescription]](cfg.findAuthorityDescriptionsTtl)
+        categoriesByFpKeyC                   <- mkCache[F, (Fingerprint, OrganizationKey), List[String]](cfg.findCategoriesTtl)
+        serviceDescC                         <- mkCache[F, (OrganizationKey, String), Option[Service]](cfg.findServiceDescriptionTtl)
+        orgsByServiceElementC                <- mkCache[F, (Either[ServiceElementType, String], ParameterType, String), List[LightweightOrganization]](cfg.findOrganizationsByServiceElementTtl)
+        verifyCategoryC                      <- mkCache[F, (Fingerprint, Category), VerificationResult](cfg.verifyCategoryTtl)
       } yield new Impl[F](
         underlying,
         categoriesC, intermediariesC, certByFpC, urisByCategoryC,
@@ -45,14 +45,14 @@ object CachedDvdvClient {
       underlying: DvdvClient[F],
       categoriesC:           MemoryCache[F, Unit, List[DirectoryOrganizationCategoryLevel1DTO]],
       intermediariesC:       MemoryCache[F, Unit, List[SummaryServiceElementDTO]],
-      certByFpC:             MemoryCache[F, String, Option[Certificate]],
-      urisByCategoryC:       MemoryCache[F, String, List[String]],
-      authDescriptionC:      MemoryCache[F, (String, String), Option[OrganizationDescription]],
-      authDescriptionsC:     MemoryCache[F, String, List[OrganizationDescription]],
-      categoriesByFpKeyC:    MemoryCache[F, (String, String), List[String]],
-      serviceDescC:          MemoryCache[F, (String, String), Option[Service]],
-      orgsByServiceElementC: MemoryCache[F, (ServiceElementType, ParameterType, String), List[LightweightOrganization]],
-      verifyCategoryC:       MemoryCache[F, (String, String), VerificationResult]
+      certByFpC:             MemoryCache[F, Fingerprint, Option[Certificate]],
+      urisByCategoryC:       MemoryCache[F, Category, List[String]],
+      authDescriptionC:      MemoryCache[F, (Category, OrganizationKey), Option[OrganizationDescription]],
+      authDescriptionsC:     MemoryCache[F, OrganizationKey, List[OrganizationDescription]],
+      categoriesByFpKeyC:    MemoryCache[F, (Fingerprint, OrganizationKey), List[String]],
+      serviceDescC:          MemoryCache[F, (OrganizationKey, String), Option[Service]],
+      orgsByServiceElementC: MemoryCache[F, (Either[ServiceElementType, String], ParameterType, String), List[LightweightOrganization]],
+      verifyCategoryC:       MemoryCache[F, (Fingerprint, Category), VerificationResult]
   ) extends DvdvClient[F] {
 
     def categories: F[List[DirectoryOrganizationCategoryLevel1DTO]] =
@@ -64,22 +64,22 @@ object CachedDvdvClient {
     def serviceVersion: F[ServiceVersion] =
       underlying.serviceVersion // not cached
 
-    def findAuthorityDescription(category: String, organizationKey: String): F[Option[OrganizationDescription]] =
+    def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]] =
       cached(authDescriptionC, (category, organizationKey))(
         underlying.findAuthorityDescription(category, organizationKey)
       )
 
-    def findAuthorityDescriptions(organizationKey: String): F[List[OrganizationDescription]] =
+    def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]] =
       cached(authDescriptionsC, organizationKey)(
         underlying.findAuthorityDescriptions(organizationKey)
       )
 
-    def findCategories(fingerPrint: String, organizationKey: String): F[List[String]] =
+    def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]] =
       cached(categoriesByFpKeyC, (fingerPrint, organizationKey))(
         underlying.findCategories(fingerPrint, organizationKey)
       )
 
-    def findCertificateByFingerprint(fingerPrint: String): F[Option[Certificate]] =
+    def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]] =
       cached(certByFpC, fingerPrint)(
         underlying.findCertificateByFingerprint(fingerPrint)
       )
@@ -89,21 +89,30 @@ object CachedDvdvClient {
         parameterType: ParameterType,
         parameterValue: String
     ): F[List[LightweightOrganization]] =
-      cached(orgsByServiceElementC, (serviceElementType, parameterType, parameterValue))(
+      cached(orgsByServiceElementC, (Left(serviceElementType), parameterType, parameterValue))(
         underlying.findOrganizationsByServiceElement(serviceElementType, parameterType, parameterValue)
       )
 
-    def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]] =
+    def findOrganizationsByServiceElement(
+        customServiceElementType: String,
+        parameterType: ParameterType,
+        parameterValue: String
+    ): F[List[LightweightOrganization]] =
+      cached(orgsByServiceElementC, (Right(customServiceElementType), parameterType, parameterValue))(
+        underlying.findOrganizationsByServiceElement(customServiceElementType, parameterType, parameterValue)
+      )
+
+    def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]] =
       cached(serviceDescC, (organizationKey, serviceSpecificationUri))(
         underlying.findServiceDescription(organizationKey, serviceSpecificationUri)
       )
 
-    def findServiceSpecificationUrisByCategory(category: String): F[List[String]] =
+    def findServiceSpecificationUrisByCategory(category: Category): F[List[String]] =
       cached(urisByCategoryC, category)(
         underlying.findServiceSpecificationUrisByCategory(category)
       )
 
-    def verifyCategory(fingerPrint: String, category: String): F[VerificationResult] =
+    def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult] =
       cached(verifyCategoryC, (fingerPrint, category))(
         underlying.verifyCategory(fingerPrint, category)
       )

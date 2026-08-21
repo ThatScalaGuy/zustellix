@@ -28,18 +28,28 @@ trait DvdvClient[F[_]] {
   def serviceVersion: F[ServiceVersion]
 
   // 8 query-style GETs (request_json=...)
-  def findAuthorityDescription(category: String, organizationKey: String): F[Option[OrganizationDescription]]
-  def findAuthorityDescriptions(organizationKey: String): F[List[OrganizationDescription]]
-  def findCategories(fingerPrint: String, organizationKey: String): F[List[String]]
-  def findCertificateByFingerprint(fingerPrint: String): F[Option[Certificate]]
+  def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]]
+  def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]]
+  def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]]
+  def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]]
   def findOrganizationsByServiceElement(
       serviceElementType: ServiceElementType,
       parameterType: ParameterType,
       parameterValue: String
   ): F[List[LightweightOrganization]]
-  def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]]
-  def findServiceSpecificationUrisByCategory(category: String): F[List[String]]
-  def verifyCategory(fingerPrint: String, category: String): F[VerificationResult]
+
+  /** Like the `ServiceElementType` overload, but for operator-configured
+   *  service-element types: sends the spec's `customServiceElementType`
+   *  request field instead of `serviceElementType`.
+   */
+  def findOrganizationsByServiceElement(
+      customServiceElementType: String,
+      parameterType: ParameterType,
+      parameterValue: String
+  ): F[List[LightweightOrganization]]
+  def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]]
+  def findServiceSpecificationUrisByCategory(category: Category): F[List[String]]
+  def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult]
 
   // 6 batch POSTs
   def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]

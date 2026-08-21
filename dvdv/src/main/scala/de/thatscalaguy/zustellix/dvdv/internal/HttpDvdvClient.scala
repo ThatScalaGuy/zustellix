@@ -32,30 +32,30 @@ final class HttpDvdvClient[F[_]: Concurrent](
       .use(ResponseDecoder.required[F, ServiceVersion](_))
 
   // --- 8 query-style GETs ---
-  def findAuthorityDescription(category: String, organizationKey: String): F[Option[OrganizationDescription]] = {
+  def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]] = {
     val uri = withRequestJson(base, "findauthoritydescription",
-      jsonObject("category" -> category, "organizationKey" -> organizationKey))
+      jsonObject("category" -> category.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.optional[F, OrganizationDescription](_))
   }
 
-  def findAuthorityDescriptions(organizationKey: String): F[List[OrganizationDescription]] = {
+  def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]] = {
     val uri = withRequestJson(base, "findauthoritydescriptions",
-      jsonObject("organizationKey" -> organizationKey))
+      jsonObject("organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.required[F, List[OrganizationDescription]](_))
   }
 
-  def findCategories(fingerPrint: String, organizationKey: String): F[List[String]] = {
+  def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]] = {
     val uri = withRequestJson(base, "findcategories",
-      jsonObject("fingerPrint" -> fingerPrint, "organizationKey" -> organizationKey))
+      jsonObject("fingerPrint" -> fingerPrint.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.required[F, List[String]](_))
   }
 
-  def findCertificateByFingerprint(fingerPrint: String): F[Option[Certificate]] = {
+  def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]] = {
     val uri = withRequestJson(base, "findCertificateByFingerprint",
-      jsonObject("fingerPrint" -> fingerPrint))
+      jsonObject("fingerPrint" -> fingerPrint.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.optional[F, Certificate](_))
       .flatTap(_.traverse_(Revocation.check[F](_, config.ignoreRevocation)))
@@ -76,26 +76,41 @@ final class HttpDvdvClient[F[_]: Concurrent](
       .use(ResponseDecoder.required[F, List[LightweightOrganization]](_))
   }
 
-  def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]] = {
+  def findOrganizationsByServiceElement(
+      customServiceElementType: String,
+      parameterType: ParameterType,
+      parameterValue: String
+  ): F[List[LightweightOrganization]] = {
+    val uri = withRequestJson(base, "findOrganizationsByServiceElement",
+      jsonObject(
+        "customServiceElementType" -> customServiceElementType,
+        "parameterType"            -> parameterType.toString,
+        "parameterValue"           -> parameterValue
+      ))
+    http.run(HttpRequest[F](Method.GET, uri))
+      .use(ResponseDecoder.required[F, List[LightweightOrganization]](_))
+  }
+
+  def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]] = {
     val uri = withRequestJson(base, "findservicedescription",
       jsonObject(
-        "organizationKey"         -> organizationKey,
+        "organizationKey"         -> organizationKey.value,
         "serviceSpecificationUri" -> serviceSpecificationUri
       ))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.optional[F, Service](_))
   }
 
-  def findServiceSpecificationUrisByCategory(category: String): F[List[String]] = {
+  def findServiceSpecificationUrisByCategory(category: Category): F[List[String]] = {
     val uri = withRequestJson(base, "findServiceSpecificationUrisByCategory",
-      jsonObject("category" -> category))
+      jsonObject("category" -> category.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.required[F, List[String]](_))
   }
 
-  def verifyCategory(fingerPrint: String, category: String): F[VerificationResult] = {
+  def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult] = {
     val uri = withRequestJson(base, "verifycategory",
-      jsonObject("fingerPrint" -> fingerPrint, "category" -> category))
+      jsonObject("fingerPrint" -> fingerPrint.value, "category" -> category.value))
     http.run(HttpRequest[F](Method.GET, uri))
       .use(ResponseDecoder.required[F, VerificationResult](_))
   }

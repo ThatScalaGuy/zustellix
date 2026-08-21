@@ -256,6 +256,7 @@ as shown above, add `org.typelevel::log4cats-slf4j` plus an SLF4J backend
 ```scala
 import cats.effect.{IO, IOApp}
 import de.thatscalaguy.zustellix.dvdv.*
+import de.thatscalaguy.zustellix.dvdv.model.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
 
@@ -275,8 +276,8 @@ object Demo extends IOApp.Simple:
     DvdvClient.resource[IO](config).use { dvdv =>
       for
         cats  <- dvdv.categories
-        org   <- dvdv.findAuthorityDescription("Meldebehörde", "ags:01999001")
-        check <- dvdv.verifyCategory("0272c56c9742a62501329a3aa78974f1605c92a2", "Meldebehörde")
+        org   <- dvdv.findAuthorityDescription(Category.unsafe("Meldebehörde"), OrganizationKey.unsafe("ags:01999001"))
+        check <- dvdv.verifyCategory(Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2"), Category.unsafe("Meldebehörde"))
         _     <- IO.println(s"Got ${cats.size} top-level categories")
         _     <- IO.println(s"Organization: ${org.flatMap(_.organization).map(_.nameDe)}")
         _     <- IO.println(s"Category verification: ${check.verifyCategory}")
@@ -365,17 +366,24 @@ dvdv.categories.flatMap { tree =>
   }
 }
 
-// Look up an organization (Option: 204 No Content → None)
+// Look up an organization (Option: 204 No Content → None).
+// Category, OrganizationKey and Fingerprint are validating opaque types —
+// `unsafe` throws on invalid input, `from` returns an Either.
 import de.thatscalaguy.zustellix.dvdv.model.*
 val org: IO[Option[OrganizationDescription]] =
   dvdv.findAuthorityDescription(
-    category        = "Meldebehörde",
-    organizationKey = "ags:01999001"
+    category        = Category.unsafe("Meldebehörde"),
+    organizationKey = OrganizationKey.unsafe("ags:01999001")
   )
 
-// Certificate by fingerprint
-dvdv.findCertificateByFingerprint("0272c56c9742a62501329a3aa78974f1605c92a2")
+// Certificate by fingerprint. Fingerprint normalizes on construction —
+// colons and whitespace are stripped and hex is lowercased, so the
+// colon-separated uppercase form and the plain lowercase form are the SAME
+// value (and the same cache entry):
+dvdv.findCertificateByFingerprint(Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2"))
   .map(_.flatMap(_.nameSubject))               // Some("GRP: Stadt Flensburg XhD-T") | None
+Fingerprint.unsafe("02:72:C5:6C:97:42:A6:25:01:32:9A:3A:A7:89:74:F1:60:5C:92:A2") ==
+  Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2")  // true
 
 // Organizations by service element
 dvdv.findOrganizationsByServiceElement(
@@ -384,10 +392,17 @@ dvdv.findOrganizationsByServiceElement(
   parameterValue     = "80157bbb3934cb651fb4df94a98773fba0b02b03"
 )
 
+// ... or by an operator-configured (custom) service element type
+dvdv.findOrganizationsByServiceElement(
+  customServiceElementType = "MY_TYPE",
+  parameterType            = ParameterType.URI,
+  parameterValue           = "01001000"
+)
+
 // Verify a fingerprint belongs to a category
 dvdv.verifyCategory(
-  fingerPrint = "11:51:43:a1:b5:fc:8b:b7:0a:3a:a9:b1:0f:66:73:22",
-  category    = "Behörde"
+  fingerPrint = Fingerprint.unsafe("02:72:C5:6C:97:42:A6:25:01:32:9A:3A:A7:89:74:F1:60:5C:92:A2"),
+  category    = Category.unsafe("Behörde")
 ).map(_.verifyCategory)                        // Boolean
 
 // Batch lookup
@@ -405,7 +420,7 @@ Every non-success response raises a typed `DvdvError` (a `RuntimeException`):
 ```scala
 import de.thatscalaguy.zustellix.dvdv.DvdvError
 
-dvdv.findAuthorityDescription("Meldebehörde", "ags:irrtum").attempt.flatMap {
+dvdv.findAuthorityDescription(Category.unsafe("Meldebehörde"), OrganizationKey.unsafe("ags:irrtum")).attempt.flatMap {
   case Right(Some(org))                         => IO.println(org)
   case Right(None)                              => IO.println("no match (204)")
   case Left(DvdvError.NotFound(p))              => IO.println(s"404: ${p.detail}")
@@ -427,20 +442,21 @@ trait DvdvClient[F[_]]:
   def intermediaries: F[List[SummaryServiceElementDTO]]
   def serviceVersion: F[ServiceVersion]
 
-  def findAuthorityDescription(category: String, organizationKey: String): F[Option[OrganizationDescription]]
-  def findAuthorityDescriptions(organizationKey: String): F[List[OrganizationDescription]]
-  def findCategories(fingerPrint: String, organizationKey: String): F[List[String]]
-  def findCertificateByFingerprint(fingerPrint: String): F[Option[Certificate]]
-  def findOrganizationsByServiceElement(set: ServiceElementType, pt: ParameterType, pv: String): F[OrganizationDescription]
-  def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]]
-  def findServiceSpecificationUrisByCategory(category: String): F[List[ServiceBase]]
-  def verifyCategory(fingerPrint: String, category: String): F[VerificationResult]
+  def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]]
+  def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]]
+  def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]]
+  def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]]
+  def findOrganizationsByServiceElement(serviceElementType: ServiceElementType, parameterType: ParameterType, parameterValue: String): F[List[LightweightOrganization]]
+  def findOrganizationsByServiceElement(customServiceElementType: String, parameterType: ParameterType, parameterValue: String): F[List[LightweightOrganization]]
+  def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]]
+  def findServiceSpecificationUrisByCategory(category: Category): F[List[String]]
+  def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult]
 
-  def batchFindAuthorityDescription(requests: List[Request]): F[OrganizationDescription]
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]
   def batchFindCategories(requests: List[Request]): F[List[List[String]]]
-  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[OrganizationDescription]
-  def batchFindServiceDescription(requests: List[Request]): F[Service]
-  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[Request]
+  def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]]
+  def batchFindServiceDescription(requests: List[Request]): F[List[Service]]
+  def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]]
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 ```
 
@@ -465,7 +481,7 @@ A typo fails at the call site instead of surfacing as a DVDV miss.
 
 Every outbound operation:
 
-1. calls `dvdv.findServiceDescription("ags:<ags>", serviceUri)` **once** per
+1. calls `dvdv.findServiceDescription(OrganizationKey.unsafe("ags:<ags>"), serviceUri)` **once** per
    call (memoized by the DVDV mules cache);
 2. pulls **both** the addressee (`OSCI_ADDRESSEE`) and intermediary
    (`OSCI_INTERMEDIARY`) routes out of that single service description —

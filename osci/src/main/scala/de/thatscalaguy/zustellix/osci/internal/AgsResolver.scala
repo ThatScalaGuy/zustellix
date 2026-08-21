@@ -3,7 +3,7 @@ package de.thatscalaguy.zustellix.osci.internal
 import cats.effect.Sync
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
-import de.thatscalaguy.zustellix.dvdv.model.{Certificate as DvdvCert, ServiceElementInfo, ServiceElementType}
+import de.thatscalaguy.zustellix.dvdv.model.{Certificate as DvdvCert, OrganizationKey, ServiceElementInfo, ServiceElementType}
 import de.thatscalaguy.zustellix.osci.{Ags, OsciConfig, OsciError}
 
 import java.io.ByteArrayInputStream
@@ -21,7 +21,7 @@ object AgsResolver {
     new AgsResolver[F] {
 
       def resolve(ags: Ags): F[OsciRoute] = {
-        val orgKey = s"ags:${ags.value}"
+        val orgKey = OrganizationKey.unsafe(s"ags:${ags.value}")
         dvdv.findServiceDescription(orgKey, config.serviceUri).flatMap {
           case None =>
             Sync[F].raiseError(OsciError.AgsNotInDvdv(ags, config.serviceUri))
