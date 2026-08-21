@@ -54,6 +54,17 @@ object OsciError {
   final case class NoSuchMessage(messageId: String)
       extends OsciError(s"No delivery found for messageId '$messageId'")
 
+  /** `fetch(messageId)` got a response whose message id names a different
+   *  delivery — the intermediary answered for the wrong message. Raised
+   *  before the response content is decrypted or verified: the fetch is the
+   *  acknowledgement (see [[OsciMailbox]]), so proceeding under the requested
+   *  id would acknowledge/process the wrong delivery.
+   */
+  final case class MessageIdMismatch(requested: String, returned: String)
+      extends OsciError(
+        s"FetchDelivery for messageId '$requested' returned a delivery with messageId '$returned'"
+      )
+
   /** Received content carries no author signature and the policy is
    *  [[ContentSignaturePolicy.Require]]. `messageId` identifies the affected
    *  message when one is known at that point.

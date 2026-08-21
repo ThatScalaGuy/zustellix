@@ -33,7 +33,9 @@ class OsciBibBridgeIT extends CatsEffectSuite {
     // TODO (the ack property, self-send loopback against the IT mailbox):
     //  1. store() a message addressed to our own mailbox
     //  2. OsciMailbox.pending must list the receipt's messageId
-    //  3. fetch(messageId) must return the sent payload (decrypted)
+    //  3. fetch(messageId) must return the sent payload (decrypted) under
+    //     the SAME messageId — a response naming a different id must surface
+    //     as OsciError.MessageIdMismatch, not as a silently relabelled message
     //  4. pending must no longer list the messageId — the reception entry
     //     recorded at fetch time IS the acknowledgement
     // As for mediate, an InitDialog refusal must surface as

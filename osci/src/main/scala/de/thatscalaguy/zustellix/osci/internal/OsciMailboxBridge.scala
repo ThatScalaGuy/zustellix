@@ -62,6 +62,7 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
 
         val rsp = fd.send()
         checkFeedback(rsp.getFeedback)
+        val confirmedId = confirmMessageId(messageId, rsp.getMessageId)
 
         val (xml, signature) = extractVerifiedXml(
           rsp.getContentContainer,
@@ -72,7 +73,7 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
         ).getOrElse(throw OsciError.NoSuchMessage(messageId))
 
         OsciMessage(
-          messageId = Option(rsp.getMessageId).getOrElse(messageId),
+          messageId = confirmedId,
           subject   = Option(rsp.getSubject),
           xml       = xml,
           creation  = parseTimestamp(rsp.getTimestampCreation),

@@ -55,6 +55,21 @@ private[osci] object OsciBibSupport {
       }
       .distinctBy(_.code)
 
+  /** The message id a FetchDelivery response is answering for. Null means the
+   *  response carried no MessageId element — fall back to the requested id. A
+   *  non-null id different from the requested one means the intermediary
+   *  answered for the wrong delivery and raises
+   *  [[OsciError.MessageIdMismatch]] — silently substituting the requested id
+   *  would let the caller acknowledge the wrong message. An empty returned id
+   *  is deliberately a mismatch, not an absence — a present-but-empty
+   *  MessageId element is itself anomalous.
+   */
+  def confirmMessageId(requested: String, returned: String): String = {
+    if returned != null && returned != requested then
+      throw OsciError.MessageIdMismatch(requested, returned)
+    requested
+  }
+
   def topFeedbackCode(fb: Array[Array[String]]): String =
     feedbackRows(fb).headOption.flatMap { r =>
       if r.length >= 2 then Option(r(1)) else None

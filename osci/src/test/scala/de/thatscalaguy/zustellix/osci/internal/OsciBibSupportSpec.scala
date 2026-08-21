@@ -142,6 +142,35 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(topFeedbackCode(fb), "0800")
   }
 
+  // confirmMessageId guards the mailbox fetch: the FetchDelivery response
+  // must answer for the requested message id. The parser leaves the field
+  // null when the response carries no MessageId element — only that absence
+  // falls back to the requested id.
+
+  test("confirmMessageId falls back to the requested id when the response carries none (null)") {
+    assertEquals(confirmMessageId("msg-1", null), "msg-1")
+  }
+
+  test("confirmMessageId confirms a matching response id") {
+    assertEquals(confirmMessageId("msg-1", "msg-1"), "msg-1")
+  }
+
+  test("confirmMessageId: a different response id raises MessageIdMismatch carrying both ids") {
+    val e = interceptMessage[OsciError.MessageIdMismatch](
+      "FetchDelivery for messageId 'msg-1' returned a delivery with messageId 'msg-2'"
+    ) {
+      confirmMessageId("msg-1", "msg-2")
+    }
+    assertEquals(e.requested, "msg-1")
+    assertEquals(e.returned, "msg-2")
+  }
+
+  test("confirmMessageId treats an empty response id as a mismatch, not an absence") {
+    intercept[OsciError.MessageIdMismatch] {
+      confirmMessageId("msg-1", "")
+    }
+  }
+
   test("feedbackWarnings collects 3xxx rows and dedups per-language repeats") {
     val fb = Array(
       Array("de", "3802", "Signatur des Empfängers über die Annahme- bzw. Bearbeitungsantwort fehlt"),
@@ -530,6 +559,9 @@ class OsciBibSupportSpec extends FunSuite {
     // In particular an OsciResponse raised by checkFeedback keeps its messageId.
     val rsp = OsciError.OsciResponse("9000", "boom", Some("msg-1"))
     assert(toOsciError(rsp) eq rsp)
+    // And a MessageIdMismatch raised by confirmMessageId is not re-wrapped.
+    val mm = OsciError.MessageIdMismatch("a", "b")
+    assert(toOsciError(mm) eq mm)
   }
 
   test("toOsciError: IOException stays OsciTransport, GeneralSecurityException maps to Certificate") {

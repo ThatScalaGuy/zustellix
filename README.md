@@ -908,6 +908,7 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned an error (`9xxx`) code — as feedback rows or as a SOAP fault; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
+| `MessageIdMismatch`    | `fetch(messageId)` got a response whose message id names a different delivery |
 | `UnsignedContent`      | received content carries no content signature and `contentSignatures = Require` |
 | `InvalidContentSignature` | the content signature on received content failed verification (raised regardless of policy) |
 | `Certificate`          | cert / key decoding failure |

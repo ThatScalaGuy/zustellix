@@ -32,8 +32,11 @@ trait OsciMailbox[F[_]] {
 
   /** Fetches one delivery by message id (`FetchDelivery`) and decrypts its
    *  content with our own cipher cert. Raises [[OsciError.NoSuchMessage]]
-   *  when the response carries no content for the id. `3xxx` warnings on the
-   *  response are surfaced via [[OsciMessage.warnings]].
+   *  when the response carries no content for the id, and
+   *  [[OsciError.MessageIdMismatch]] when the response names a different
+   *  message id than requested — the intermediary answered for the wrong
+   *  delivery. `3xxx` warnings on the response are surfaced via
+   *  [[OsciMessage.warnings]].
    */
   def fetch(messageId: String): F[OsciMessage]
 }
