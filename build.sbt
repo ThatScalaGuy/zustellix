@@ -23,10 +23,14 @@ ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-feature",
   "-Wunused:all",
-  "-Xfatal-warnings"
+  "-Xfatal-warnings",
+  "-java-output-version:11"
 )
 
-ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("21"))
+ThisBuild / githubWorkflowJavaVersions := Seq(
+  JavaSpec.temurin("21"),
+  JavaSpec.temurin("11")
+)
 
 lazy val root = (project in file("."))
   .enablePlugins(NoPublishPlugin)
