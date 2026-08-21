@@ -14,6 +14,12 @@ object OsciFacade {
   /** Build a multi-tenant facade. One [[OsciClient]] is constructed per
    *  tenant config. `dvdvFor` returns the DvdvClient to use for a given
    *  tenant; the caller owns those clients' lifetimes.
+   *
+   *  Boot is all-or-nothing: every tenant client is built eagerly when the
+   *  resource is acquired, and a tenant whose client cannot be built (e.g.
+   *  its certificate fails to load) fails the whole resource with
+   *  [[OsciError.TenantInitFailed]] naming that tenant — there is no
+   *  partial boot.
    */
   def fromConfigs[F[_]: Async](
       src:    ConfigSource[F],
@@ -23,7 +29,9 @@ object OsciFacade {
     for {
       cfgs  <- Resource.eval(src.load)
       pairs <- cfgs.toList.traverse { case (id, c) =>
-                 OsciClient.resource[F](c, dvdvFor(id), sink).map(id -> _)
+                 OsciClient.resource[F](c, dvdvFor(id), sink)
+                   .adaptError { case e => OsciError.TenantInitFailed(id, e) }
+                   .map(id -> _)
                }
       registry = TenantRegistry.inMemory[F](pairs.toMap)
     }

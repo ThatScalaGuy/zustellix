@@ -1,8 +1,9 @@
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.{Resource, Sync}
+import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{CertCredential, CertSource}
-import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciReceipt}
+import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciReceipt}
 
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
@@ -18,7 +19,6 @@ import de.osci.osci12.roles.{Addressee, Intermed, Originator}
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
 import java.io.ByteArrayInputStream
-import java.nio.file.Files
 import java.security.Security
 
 private[osci] object OsciBibBridge {
@@ -32,7 +32,8 @@ private[osci] object OsciBibBridge {
       .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
 
   /** Alias-keyed path: the same PKCS12 the DVDV client uses, supplied by the
-   *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes.
+   *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes
+   *  (already in the PKCS12 shape — no conversion needed).
    */
   def resource[F[_]: Sync](
       cred:      CertCredential,
@@ -42,9 +43,11 @@ private[osci] object OsciBibBridge {
     Resource.eval(originator[F](cred))
       .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
 
-  /** Our own OSCI role: signer + decrypter from the tenant's PKCS12. Also
-   *  used by the mailbox bridge, where the same role fetches and decrypts
-   *  inbound deliveries.
+  /** Our own OSCI role: signer + decrypter from the tenant's PKCS12.
+   *  osci-bibliothek's `PKCS12Signer`/`PKCS12Decrypter` consume PKCS12
+   *  streams only, so PEM sources are converted to an in-memory PKCS12
+   *  first. Also used by the mailbox bridge, where the same role fetches
+   *  and decrypts inbound deliveries.
    */
   def originator[F[_]: Sync](certSource: CertSource): F[Originator] =
     build[F](buildSignerDecrypter[F](certSource))
@@ -52,12 +55,10 @@ private[osci] object OsciBibBridge {
   def originator[F[_]: Sync](cred: CertCredential): F[Originator] =
     build[F](buildSignerDecrypter[F](cred))
 
-  private def build[F[_]: Sync](sd: F[(Signer, Decrypter)]): F[Originator] = {
-    import cats.syntax.all.*
+  private def build[F[_]: Sync](sd: F[(Signer, Decrypter)]): F[Originator] =
     registerBouncyCastle[F] *> sd.map { case (signer, decrypter) =>
       new Originator(signer, decrypter)
     }
-  }
 
   private def registerBouncyCastle[F[_]: Sync]: F[Unit] =
     Sync[F].blocking {
@@ -67,15 +68,8 @@ private[osci] object OsciBibBridge {
     }
 
   private def buildSignerDecrypter[F[_]: Sync](certSource: CertSource): F[(Signer, Decrypter)] =
-    certSource match {
-      case CertSource.Pkcs12(path, pwd) =>
-        Sync[F].blocking(fromPkcs12Bytes(Files.readAllBytes(path), pwd))
-      case CertSource.Pkcs12Bytes(bytes, pwd) =>
-        Sync[F].blocking(fromPkcs12Bytes(bytes, pwd))
-      case _: CertSource.Pem | _: CertSource.PemBytes =>
-        Sync[F].raiseError(OsciError.Config(
-          "OSCI bridge requires a PKCS12 CertSource (PEM is not supported in v1)"
-        ))
+    CertCredential.fromSource[F](certSource).flatMap { cred =>
+      Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password))
     }
 
   private def buildSignerDecrypter[F[_]: Sync](cred: CertCredential): F[(Signer, Decrypter)] =

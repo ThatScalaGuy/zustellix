@@ -527,8 +527,9 @@ Every outbound operation:
    audit trail is not success-only (best-effort — a sink failure never fails
    the operation).
 
-> The OSCI bridge requires a PKCS12 `CertSource` (`Pkcs12` or `Pkcs12Bytes`) —
-> neither PEM variant is supported here.
+> osci-bibliothek itself consumes PKCS12 only, but the PEM `CertSource`
+> variants (`Pem` / `PemBytes`) are converted to an in-memory PKCS12
+> automatically — all four variants work here.
 
 ### Single tenant (sync XMeld)
 
@@ -796,6 +797,11 @@ optional and default to 10 s / 120 s; `contentSignatures` is optional —
 `require` or `warn`, default `warn`; `capturePayloads` is optional —
 `true` stores the decrypted response XML on `Laufzettel.rawXml`, default
 `false`, see [Laufzettel](#laufzettel).)
+
+`fromConfigs` is all-or-nothing: every tenant client is built eagerly when
+the resource is acquired, and a tenant whose cert fails to load fails the
+whole facade with an `OsciError.TenantInitFailed` naming that tenant — there
+is no partial boot.
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
 per tenant cert/intermediary.

@@ -69,6 +69,13 @@ object OsciError {
   final case class Certificate(cause: Throwable)
       extends OsciError("Certificate / key error", cause)
 
+  /** Raised by [[OsciFacade.fromConfigs]] when building one tenant's client
+   *  fails during resource acquisition. The facade is all-or-nothing, so this
+   *  fails the whole resource, but it names the offending tenant.
+   */
+  final case class TenantInitFailed(id: TenantId, cause: Throwable)
+      extends OsciError(s"Tenant '${id.value}' failed to initialise: ${cause.getMessage}", cause)
+
   final case class Config(reason: String)
       extends OsciError(s"Configuration error: $reason")
 }
