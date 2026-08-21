@@ -97,6 +97,16 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   duplicate row raises where it previously slipped through, and the
 >   mailbox's `pending` / `fetch` no longer abort on `3800` / `3801`
 >   ("more available than the fetch limit").
+> - `OsciMailbox.pending` now returns `F[PendingPage]` instead of
+>   `F[List[PendingDelivery]]`: the deliveries moved to
+>   `PendingPage.deliveries`, and the response's `3xxx` `warnings` ride
+>   along — `PendingPage.truncated` (derived from `3800` / `3801`) finally
+>   tells "mailbox fully listed" apart from "listing cut off at
+>   `fetchLimit`", which `size == fetchLimit` alone could not.
+> - `OsciMessage` gained a `warnings: List[OsciFeedback] = Nil` field for
+>   the `3xxx` feedback of the fetch response. Construction and field access
+>   compile unchanged; pattern matches that destructure every field need the
+>   new one.
 > - `OsciError.OsciResponse` gained a `messageId: Option[String] = None`
 >   field. Construction compiles unchanged; pattern matches that destructure
 >   every field need the new one.
@@ -522,15 +532,23 @@ val mailboxConfig = OsciMailboxConfig(
 
 OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
   for
-    waiting <- mailbox.pending                    // un-fetched deliveries, process cards only
-    _       <- waiting.traverse_ { p =>
-                 mailbox.fetch(p.messageId).flatMap { msg =>
-                   IO.println(s"${msg.messageId} [${msg.subject}]: ${msg.xml}")
-                 }
-               }
+    page <- mailbox.pending                       // un-fetched deliveries, process cards only
+    _    <- page.deliveries.traverse_ { p =>
+              mailbox.fetch(p.messageId).flatMap { msg =>
+                IO.println(s"${msg.messageId} [${msg.subject}]: ${msg.xml}")
+              }
+            }
+    _    <- IO.println("more waiting, poll again").whenA(page.truncated)
   yield ()
 }
 ```
+
+A `pending` listing is capped at `fetchLimit`. When the mailbox holds more,
+the intermediary flags the response with feedback code `3800` / `3801` —
+surfaced as `PendingPage.truncated` (the raw entries are in
+`PendingPage.warnings`). Since fetching acknowledges (see below), fetch the
+listed deliveries and call `pending` again for the next page; the count of a
+page alone cannot tell a full listing from a cut-off one.
 
 **Acknowledgement semantics.** OSCI 1.2 has no separate ack message — a
 successful `fetch` makes the intermediary record a *reception* entry on the
@@ -754,7 +772,7 @@ the four-digit code:
 | Class  | Meaning | Handling |
 |--------|---------|----------|
 | `0xxx` | success | normal result |
-| `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciResponse.warnings`, `OsciReceipt.warnings` and `Laufzettel.warnings` |
+| `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciResponse.warnings`, `OsciReceipt.warnings`, `Laufzettel.warnings`, `PendingPage.warnings` and `OsciMessage.warnings` |
 | `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued) |
 
 All feedback rows are inspected, so an error behind a per-language duplicate
