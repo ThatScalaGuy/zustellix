@@ -157,6 +157,11 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   be supplied by a standalone `CIPHER_CERTIFICATE` element with the same
 >   `serviceElementDescriptionName` — the fallback the addressee already
 >   had; previously that shape raised `RecipientCertMissing`.
+> - `OsciClient.resource` (all overloads) and `OsciFacade.fromConfigs` now
+>   require a `given LoggerFactory[F]` in scope, like the `DvdvClient`
+>   constructors — a failing `LaufzettelSink` is now logged at warn instead
+>   of being silently swallowed. Recording stays best-effort: the operation
+>   still never fails on a sink error.
 
 ---
 
@@ -276,11 +281,13 @@ atomically — write to a temp file in the same directory, then
 otherwise be served from the retained previous credential until the write
 completes.
 
-`zustellix-utils` and `zustellix-dvdv` depend only on `log4cats-core`, so to
-use `Slf4jFactory` as shown above, add `org.typelevel::log4cats-slf4j` plus
-an SLF4J backend (e.g. `logback-classic`) to your own build — or provide any
-other `LoggerFactory[F]` implementation. The `DvdvClient` constructors need
-the same `LoggerFactory[F]` in scope.
+`zustellix-utils`, `zustellix-dvdv` and `zustellix-osci` depend only on
+`log4cats-core`, so to use `Slf4jFactory` as shown above, add
+`org.typelevel::log4cats-slf4j` plus an SLF4J backend (e.g.
+`logback-classic`) to your own build — or provide any other
+`LoggerFactory[F]` implementation. The `DvdvClient` and `OsciClient`
+constructors and `OsciFacade.fromConfigs` need the same `LoggerFactory[F]`
+in scope.
 
 ---
 
@@ -542,8 +549,8 @@ Every outbound operation:
    addressee (the intermediary stays blind to personal data), and transmits it
    via osci-bibliothek;
 4. records a `Laufzettel` to the configured sink — on failure too, so the
-   audit trail is not success-only (best-effort — a sink failure never fails
-   the operation).
+   audit trail is not success-only (best-effort — a sink failure is logged
+   at warn and never fails the operation).
 
 > osci-bibliothek itself consumes PKCS12 only, but the PEM `CertSource`
 > variants (`Pem` / `PemBytes`) are converted to an in-memory PKCS12
@@ -774,6 +781,8 @@ OsciMailbox.resource[IO](mailboxConfig, cert, myTransport)
 ```scala
 import de.thatscalaguy.zustellix.osci.*
 
+// given LoggerFactory[IO] in scope, as in the single-tenant example
+
 val configs = Map(
   TenantId("flensburg") -> OsciConfig(TenantId("flensburg"), flensburgCert),
   TenantId("kiel")      -> OsciConfig(TenantId("kiel"),      kielCert)
@@ -900,8 +909,9 @@ trail, not just successes. For a failure Laufzettel:
 - `rawXml` is `None`, `warnings` is `Nil`;
 - `recipientUri` is empty when the resolver itself failed (no route exists).
 
-Recording stays best-effort in both directions: a sink failure never fails
-the operation, and a failure record never replaces or swallows the raised
+Recording stays best-effort in both directions: a sink failure is logged at
+warn via the required `LoggerFactory` and then discarded — it never fails
+the operation — and a failure record never replaces or swallows the raised
 `OsciError`.
 
 ### Error model

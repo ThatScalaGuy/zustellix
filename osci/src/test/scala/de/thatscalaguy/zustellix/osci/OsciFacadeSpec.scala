@@ -4,6 +4,8 @@ import cats.effect.{IO, Resource}
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
 import de.thatscalaguy.zustellix.dvdv.model.*
 import munit.CatsEffectSuite
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
 
 import java.nio.file.{Files, Path, Paths}
 
@@ -12,6 +14,8 @@ import java.nio.file.{Files, Path, Paths}
  *  so the stub client can leave every method unimplemented.
  */
 class OsciFacadeSpec extends CatsEffectSuite {
+
+  private given LoggerFactory[IO] = NoOpFactory[IO]
 
   private def resourcePath(name: String): Path =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)

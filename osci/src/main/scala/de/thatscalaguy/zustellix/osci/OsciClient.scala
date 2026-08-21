@@ -4,6 +4,7 @@ import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
 import de.thatscalaguy.zustellix.utils.cert.{CertManager, CertAlias}
+import org.typelevel.log4cats.LoggerFactory
 
 import de.osci.osci12.extinterfaces.TransportI
 
@@ -44,8 +45,12 @@ object OsciClient {
    *  Uses an [[OsciHttpTransport]] with the config's `connectTimeout` /
    *  `readTimeout` on the wire; the `transport` overload swaps it for a
    *  custom one.
+   *
+   *  All constructors need a `LoggerFactory[F]` in scope — a failing
+   *  [[LaufzettelSink]] is logged at warn instead of failing the operation
+   *  (e.g. log4cats' `Slf4jFactory`, or `NoOpFactory` in tests).
    */
-  def resource[F[_]: Async](
+  def resource[F[_]: Async: LoggerFactory](
       config: OsciConfig,
       dvdv:   DvdvClient[F],
       sink:   LaufzettelSink[F]
@@ -56,7 +61,7 @@ object OsciClient {
    *  of the default [[OsciHttpTransport]] (the config's timeouts then do not
    *  apply — the transport owns its own settings).
    */
-  def resource[F[_]: Async](
+  def resource[F[_]: Async: LoggerFactory](
       config:    OsciConfig,
       dvdv:      DvdvClient[F],
       sink:      LaufzettelSink[F],
@@ -88,7 +93,7 @@ object OsciClient {
    *  is picked up without rebuilding the client. The built OSCI Originator is
    *  cached and only rebuilt when the credential actually changes.
    */
-  def resource[F[_]: Async](
+  def resource[F[_]: Async: LoggerFactory](
       config: OsciConfig,
       certs:  CertManager[F],
       alias:  CertAlias,
@@ -100,7 +105,7 @@ object OsciClient {
   /** Same as the CertManager overload, but sends over the given `transport`
    *  instead of the default [[OsciHttpTransport]].
    */
-  def resource[F[_]: Async](
+  def resource[F[_]: Async: LoggerFactory](
       config:    OsciConfig,
       certs:     CertManager[F],
       alias:     CertAlias,

@@ -88,7 +88,10 @@ lazy val osci = (project in file("osci"))
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "de.osci" % "osci-bibliothek" % OsciBibV,
-      "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test
+      "org.typelevel" %% "log4cats-core" % Log4catsV,
+      "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
+      "org.typelevel" %% "log4cats-noop" % Log4catsV % Test,
+      "org.typelevel" %% "log4cats-testing" % Log4catsV % Test
     ),
     scalacOptions += "-no-indent",
     Test / fork := true
