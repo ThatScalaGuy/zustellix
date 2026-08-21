@@ -55,6 +55,16 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       .map(r => assertEquals(r, None))
   }
 
+  test("findCertificateByFingerprint maps an empty 200 to None") {
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findCertificateByFingerprint" :? _ =>
+        Ok()
+    }
+    client(routes)
+      .findCertificateByFingerprint(Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2"))
+      .map(r => assertEquals(r, None))
+  }
+
   test("findCertificateByFingerprint sends the normalized fingerprint in request_json") {
     val seen = Ref.unsafe[IO, Option[String]](None)
     val routes = HttpRoutes.of[IO] {
