@@ -18,9 +18,11 @@ import scala.concurrent.duration.*
  *
  *  Covers both the per-entry cert collaborators the manager delegates to (in-JVM
  *  PKCS12 minting -> `CertLoader.loadPkcs12Bytes`, garbage rejection, and the
- *  `InMemoryCertManager` swap/resolve semantics) and the four resource-level
- *  behaviours: first-scan readiness, corrupt-file skip, hot reload, and poll-loop
- *  survival of a transient bad scan.
+ *  `InMemoryCertManager` swap/resolve semantics) and the resource-level
+ *  behaviours: first-scan readiness, never-loaded-file skip, hot reload,
+ *  retention of a previously loaded credential over transient per-file failures
+ *  (torn writes, missing/failing password entries), alias drop on file
+ *  deletion, and poll-loop survival of a transient bad scan.
  */
 class DirectoryCertManagerSpec extends CatsEffectSuite {
 
@@ -277,7 +279,7 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
-  test("a changed password entry for an unchanged keystore is not served from the cache") {
+  test("a password change that fails to open the keystore retains the previous credential") {
     val interval = 150.millis
     for {
       dir <- tempDir
@@ -289,19 +291,122 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
                for {
                  before <- mgr.resolve(CertAlias("alice"))
                  // keystore untouched, but the password entry changes: the scan
-                 // must reload with pw-b (which fails) instead of serving the
-                 // cached pw-a credential.
+                 // attempts a reload with pw-b, which fails to open the keystore,
+                 // so the previously loaded pw-a credential is kept.
                  _     <- IO.blocking(
                             writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-b")
                           )
                  _     <- IO.sleep(interval * 4)
-                 after <- mgr.resolve(CertAlias("alice")).attempt
+                 after <- mgr.resolve(CertAlias("alice"))
                } yield (before, after)
              }
     } yield {
       val (before, after) = out
       assertEquals(before.password, "pw-a")
-      assert(after.isLeft, s"stale pw-a credential must not be reused, got $after")
+      assertEquals(after.password, "pw-a")
+      assert(before eq after, "failed reload must keep the same CertCredential instance")
+    }
+  }
+
+  test("a torn keystore write retains the previous credential until the rotated file lands") {
+    val interval = 150.millis
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 before <- mgr.resolve(CertAlias("alice"))
+                 // non-atomic rotation observed mid-overwrite: garbage bytes
+                 _      <- IO.blocking {
+                             val _ = Files.write(dir.resolve("alice.p12"), "half-written keystore".getBytes)
+                             val _ = Files.setLastModifiedTime(
+                               dir.resolve("alice.p12"),
+                               FileTime.from(Instant.now().plusSeconds(2))
+                             )
+                           }
+                 _      <- IO.sleep(interval * 4)
+                 during <- mgr.resolve(CertAlias("alice"))
+                 // the write completes: a valid rotated keystore appears
+                 _      <- IO.blocking {
+                             writeP12(dir, "alice", "pw-a")
+                             val _ = Files.setLastModifiedTime(
+                               dir.resolve("alice.p12"),
+                               FileTime.from(Instant.now().plusSeconds(4))
+                             )
+                           }
+                 _      <- IO.sleep(interval * 4)
+                 after  <- mgr.resolve(CertAlias("alice"))
+               } yield (before, during, after)
+             }
+    } yield {
+      val (before, during, after) = out
+      assert(before eq during, "torn write must keep the same CertCredential instance")
+      assert(!before.pkcs12.sameElements(after.pkcs12), "completed rotation must swap in the new keystore")
+    }
+  }
+
+  test("a missing password entry retains the previous credential and heals when it lands") {
+    val interval = 150.millis
+    val pwds     = (d: Path) => d.resolve("passwords.properties")
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writeP12(dir, "bob", "pw-b")
+               writePasswords(pwds(dir), "alice" -> "pw-a", "bob" -> "pw-b")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 before <- mgr.resolve(CertAlias("alice"))
+                 // alice's entry vanishes (passwords rewritten first during a
+                 // rotation); bob is untouched
+                 _      <- IO.blocking(writePasswords(pwds(dir), "bob" -> "pw-b"))
+                 _      <- IO.sleep(interval * 4)
+                 during <- mgr.resolve(CertAlias("alice"))
+                 bob    <- mgr.resolve(CertAlias("bob"))
+                 _      <- IO.blocking(writePasswords(pwds(dir), "alice" -> "pw-a", "bob" -> "pw-b"))
+                 _      <- IO.sleep(interval * 4)
+                 after  <- mgr.resolve(CertAlias("alice"))
+               } yield (before, during, bob, after)
+             }
+    } yield {
+      val (before, during, bob, after) = out
+      assert(before eq during, "missing password entry must keep the same CertCredential instance")
+      assertEquals(bob.password, "pw-b")
+      assertEquals(after.password, "pw-a")
+    }
+  }
+
+  test("a deleted .p12 drops its alias at the next scan while others keep resolving") {
+    val interval = 150.millis
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writeP12(dir, "bob", "pw-b")
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a", "bob" -> "pw-b")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 _       <- mgr.resolve(CertAlias("bob"))
+                 _       <- IO.blocking(Files.delete(dir.resolve("bob.p12")))
+                 _       <- IO.sleep(interval * 4)
+                 bob     <- mgr.resolve(CertAlias("bob")).attempt
+                 alice   <- mgr.resolve(CertAlias("alice")).attempt
+                 aliases <- mgr.knownAliases
+               } yield (bob, alice, aliases)
+             }
+    } yield {
+      val (bob, alice, aliases) = out
+      bob match {
+        case Left(CertManagerError.UnknownCert(a)) => assertEquals(a, CertAlias("bob"))
+        case other => fail(s"deleted bob.p12 must drop the alias with UnknownCert, got $other")
+      }
+      assert(alice.isRight, s"alice should still resolve, got $alice")
+      assertEquals(aliases, Set(CertAlias("alice")))
     }
   }
 

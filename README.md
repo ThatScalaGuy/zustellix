@@ -238,9 +238,18 @@ DirectoryCertManager.resource[IO](cfg).use { certs =>
 ```
 
 The first scan completes before the `Resource` is ready (a misconfigured
-directory fails fast). A corrupt `<alias>.p12` is logged and skipped — the
-rest still swap in. The active map always reflects current disk truth, so a
-rotated-away cert is never served stale.
+directory fails fast). A `<alias>.p12` that has never loaded (e.g. corrupt)
+is logged and skipped — the rest still swap in. Once an alias has loaded, a
+transient per-file failure — a keystore read mid-overwrite during rotation,
+or a password entry that has not landed yet — retains the previously loaded
+credential instead of dropping the tenant, with the failure logged each scan
+until the file loads again; an alias is dropped only when its `.p12` file is
+deleted from the directory (observed at the next scan). Rotate files
+atomically — write to a temp file in the same directory, then
+`Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE)` — since
+`cp`/`scp`/configmap-style sync is not atomic, and a torn file would
+otherwise be served from the retained previous credential until the write
+completes.
 
 `zustellix-utils` depends only on `log4cats-core`, so to use `Slf4jFactory`
 as shown above, add `org.typelevel::log4cats-slf4j` plus an SLF4J backend

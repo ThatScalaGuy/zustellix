@@ -29,19 +29,30 @@ final case class DirectoryCertManagerConfig(
  *
  *   - The first scan completes before the `Resource` is ready, so `resolve`
  *     never races an empty map (and a misconfigured dir fails fast).
- *   - One unreadable/corrupt `<alias>.p12` is logged and skipped; the other
- *     entries still swap in (atomic whole-map swap, no per-entry merge).
- *   - An entry that fails to parse is dropped until it parses again — the
- *     active map always reflects current disk truth (never serves a stale
- *     or rotated-away cert).
+ *   - A `<alias>.p12` that has never loaded successfully is logged and
+ *     skipped; the other entries still swap in (atomic whole-map swap, no
+ *     per-entry merge).
+ *   - Once an alias has loaded, a per-file load failure — a keystore read
+ *     mid-overwrite during non-atomic rotation, a password entry missing or
+ *     not yet updated, corrupt bytes — keeps the previously loaded
+ *     credential for that alias, with the failure logged on every scan
+ *     until it heals. An alias is dropped only when its `<alias>.p12`
+ *     disappears from the directory (picked up at the next scan).
  *   - An unchanged file (same size, same last-modified time, same resolved
  *     password) is not re-read or re-parsed: the previous [[CertCredential]]
  *     instance is carried over, so credential identity stays stable across
  *     scans. A changed password entry forces a reload with the new password
- *     (and the alias drops if the keystore does not open with it, consistent
- *     with disk-truth semantics).
+ *     (and if the keystore does not open with it, the previously loaded
+ *     credential is retained until it does).
  *   - The background poll loop is run by a `Supervisor` tied to the
  *     `Resource` scope, and a failed scan never kills the loop.
+ *
+ *  Writers should rotate keystores and the passwords file atomically: write
+ *  to a temp file in the same directory, then
+ *  `Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE)`, so a scan
+ *  never observes a half-written file. Plain `cp`/`scp`/configmap-style
+ *  sync is not atomic; a torn file is served from the retained previous
+ *  credential until the write completes.
  */
 object DirectoryCertManager {
 
@@ -110,9 +121,18 @@ object DirectoryCertManager {
                    loadEntry[F](p, pwds, prev.get(p)).attempt.flatMap {
                      case Right(entry) => (p -> entry).some.pure[F]
                      case Left(err) =>
-                       log
-                         .warn(err)(s"skipping cert file $p")
-                         .as(Option.empty[(Path, CachedEntry)])
+                       prev.get(p) match {
+                         case Some(cached) =>
+                           log
+                             .warn(err)(
+                               s"failed to reload cert file $p; keeping previously loaded credential for alias ${cached.alias.value}"
+                             )
+                             .as((p -> cached).some)
+                         case None =>
+                           log
+                             .warn(err)(s"skipping cert file $p")
+                             .as(Option.empty[(Path, CachedEntry)])
+                       }
                    }
                  }
       _ <- cache.set(entries.toMap)
