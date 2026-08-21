@@ -349,7 +349,8 @@ val config = DvdvConfig(
   cacheConfig = CacheConfig(
     categoriesTtl               = 2.hours,     // override any subset
     findAuthorityDescriptionTtl = 15.minutes,
-    verifyCategoryTtl           = 1.minute
+    verifyCategoryTtl           = 1.minute,
+    purgeInterval               = 1.minute     // background purge cadence for expired entries
   )
 )
 
@@ -368,6 +369,8 @@ Default TTLs:
 | `findServiceDescription`, `findOrganizationsByServiceElement`       | 10 minutes  |
 | `verifyCategory`                                                    | 5 minutes   |
 | `serviceVersion`, all `batch*` POSTs                                | not cached  |
+
+Expired entries are also purged by a background fiber every `purgeInterval` (default: 1 minute), scoped to the client `Resource`, so the caches do not grow unboundedly between accesses.
 
 ### API examples
 

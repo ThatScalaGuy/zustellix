@@ -177,6 +177,6 @@ object DvdvClient {
                        .map(tokenMgr => AuthMiddleware(tokenMgr)(failover))
                    } else Resource.pure[F, Client[F]](failover)
       raw       = HttpDvdvClient[F](directory, config)
-      cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
+      cached   <- CachedDvdvClient.make[F](raw, config.cacheConfig)
     } yield cached
 }
