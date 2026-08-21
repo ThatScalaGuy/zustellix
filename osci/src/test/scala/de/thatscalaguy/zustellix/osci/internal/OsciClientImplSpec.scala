@@ -76,7 +76,46 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(seen.head.messageId, "msg-1")
         assertEquals(seen.head.recipientAgs, Ags)
         assertEquals(seen.head.status, "OK")
+        assertEquals(seen.head.rawXml, None)
       }
+    }
+  }
+
+  test("request: capturePayloads = true records the response payload on the Laufzettel") {
+    val raw = OsciRawResult(Some("<resp/>"), "msg-1", "OK")
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(raw),
+        fixedResolver(Route),
+        recordingSink(ref),
+        capturePayloads = true
+      )
+      for {
+        _    <- impl.request(Ags, "<req/>")
+        seen <- ref.get
+      }
+      yield assertEquals(seen.head.rawXml, Some("<resp/>"))
+    }
+  }
+
+  test("request: capturePayloads = true with no extractable content records rawXml = None") {
+    val raw = OsciRawResult(None, "msg-1", "0800")
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(raw),
+        fixedResolver(Route),
+        recordingSink(ref),
+        capturePayloads = true
+      )
+      for {
+        _    <- impl.request(Ags, "<req/>")
+        seen <- ref.get
+      }
+      yield assertEquals(seen.head.rawXml, None)
     }
   }
 
@@ -96,7 +135,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
       }
       yield {
         assertEquals(out, OsciResponse(None, "msg-1", "0800"))
-        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.rawXml, None)
       }
     }
   }
@@ -188,7 +227,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(seen.head.recipientAgs, Ags)
         assertEquals(seen.head.recipientUri, Route.addresseeUri)
         assertEquals(seen.head.status, "9000")
-        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.rawXml, None)
         assertEquals(seen.head.warnings, Nil)
       }
     }
@@ -213,7 +252,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "")
         assertEquals(seen.head.status, "OsciTransport")
-        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.rawXml, None)
       }
     }
   }
@@ -319,7 +358,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(seen.head.messageId, "msg-2")
         assertEquals(seen.head.recipientAgs, Ags)
         assertEquals(seen.head.status, "0800")
-        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.rawXml, None)
       }
     }
   }
@@ -360,7 +399,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(seen.head.recipientAgs, Ags)
         assertEquals(seen.head.recipientUri, Route.addresseeUri)
         assertEquals(seen.head.status, "9802")
-        assertEquals(seen.head.rawXml, "")
+        assertEquals(seen.head.rawXml, None)
       }
     }
   }

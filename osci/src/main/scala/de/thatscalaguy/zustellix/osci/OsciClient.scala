@@ -68,7 +68,9 @@ object OsciClient {
     Resource.eval(certSource)
       .flatMap(internal.OsciBibBridge.resource[F](_, transport, config.contentSignatures))
       .map { bridge =>
-        new internal.OsciClientImpl[F](config.tenantId, config.subject, bridge, resolver, sink)
+        new internal.OsciClientImpl[F](
+          config.tenantId, config.subject, bridge, resolver, sink, config.capturePayloads
+        )
       }
   }
 
@@ -102,7 +104,7 @@ object OsciClient {
       cred   <- Resource.eval(certs.resolve(alias))
       bridge <- internal.OsciBibBridge.resource[F](cred, transport, config.contentSignatures)
     } yield new internal.OsciClientImpl[F](
-      TenantId(alias.value), config.subject, bridge, resolver, sink
+      TenantId(alias.value), config.subject, bridge, resolver, sink, config.capturePayloads
     )
   }
 

@@ -22,6 +22,7 @@ import scala.jdk.CollectionConverters.*
  *   tenant.<id>.connectTimeoutMs       = <millis>            (optional)
  *   tenant.<id>.readTimeoutMs          = <millis>            (optional)
  *   tenant.<id>.contentSignatures      = require | warn      (optional, default warn)
+ *   tenant.<id>.capturePayloads        = true | false        (optional, default false)
  * }}}
  *
  *  The intermediary is no longer configured here — it is resolved per send
@@ -89,6 +90,18 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
         }
       }
 
+    val capturePayloads =
+      kv.get("capturePayloads").fold(false) { v =>
+        v.trim.toLowerCase match {
+          case "true"  => true
+          case "false" => false
+          case other =>
+            throw OsciError.Config(
+              s"tenant.$id.capturePayloads must be 'true' or 'false', got '$other'"
+            )
+        }
+      }
+
     OsciConfig(
       tenantId       = TenantId(id),
       certSource     = Some(certSource),
@@ -96,7 +109,8 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
       subject        = kv.getOrElse("subject", OsciConfig.DefaultSubject),
       connectTimeout = timeoutMs("connectTimeoutMs", OsciHttpTransport.DefaultConnectTimeout),
       readTimeout    = timeoutMs("readTimeoutMs", OsciHttpTransport.DefaultReadTimeout),
-      contentSignatures = contentSignatures
+      contentSignatures = contentSignatures,
+      capturePayloads   = capturePayloads
     )
   }
 }
