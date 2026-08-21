@@ -182,8 +182,9 @@ CertSource.PemBytes(
 ```
 
 `CertLoader.load[F]` turns any of them into a `LoadedCert` (private key, X509,
-SHA-1 fingerprint hex). The DVDV/OSCI clients call this for you — you rarely
-touch it directly.
+SHA-1 fingerprint hex, and the leaf-first certificate chain the source
+provides). The DVDV/OSCI clients call this for you — you rarely touch it
+directly.
 
 `toString` is redacted on every case, so a `CertSource` (or a config holding
 one) can be logged without leaking its password.

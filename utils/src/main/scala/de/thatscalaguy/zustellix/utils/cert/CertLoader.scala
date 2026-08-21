@@ -8,10 +8,18 @@ import java.security.cert.{CertificateFactory, X509Certificate}
 import java.security.{KeyStore, MessageDigest, PrivateKey, Security}
 import scala.jdk.CollectionConverters.*
 
+/** A private key plus its certificate as loaded from a [[CertSource]].
+ *
+ *  `chain` follows JSSE `getCertificateChain` semantics: the leaf certificate
+ *  is the head (`chain.head == certificate`), followed by any intermediate/CA
+ *  certificates the source provides. Single-certificate sources yield
+ *  `chain == List(certificate)`.
+ */
 final case class LoadedCert(
     privateKey: PrivateKey,
     certificate: X509Certificate,
-    fingerprintSha1Hex: String
+    fingerprintSha1Hex: String,
+    chain: List[X509Certificate]
 )
 
 object CertLoader {
@@ -43,7 +51,11 @@ object CertLoader {
 
     val pk   = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
     val cert = ks.getCertificate(alias).asInstanceOf[X509Certificate]
-    LoadedCert(pk, cert, sha1Hex(cert.getEncoded))
+    val chain = Option(ks.getCertificateChain(alias))
+      .map(_.toList.map(_.asInstanceOf[X509Certificate]))
+      .filter(_.nonEmpty)
+      .getOrElse(List(cert))
+    LoadedCert(pk, cert, sha1Hex(cert.getEncoded), chain)
   }
 
   private def loadPem[F[_]: Sync](certPath: Path, keyPath: Path, keyPassword: Option[String]): F[LoadedCert] =
@@ -64,13 +76,16 @@ object CertLoader {
 
     val cf     = CertificateFactory.getInstance("X.509")
     val certIn = new ByteArrayInputStream(certBytes)
-    val cert =
-      try cf.generateCertificate(certIn).asInstanceOf[X509Certificate]
+    val certs =
+      try cf.generateCertificates(certIn).asScala.toList.map(_.asInstanceOf[X509Certificate])
       finally certIn.close()
+    val cert = certs.headOption.getOrElse(
+      throw new IllegalArgumentException("No certificate found in PEM input")
+    )
 
     val privateKey = readPemPrivateKey(keyBytes, keyPassword, keyLabel)
 
-    LoadedCert(privateKey, cert, sha1Hex(cert.getEncoded))
+    LoadedCert(privateKey, cert, sha1Hex(cert.getEncoded), certs)
   }
 
   private def registerBouncyCastle(): Unit =
