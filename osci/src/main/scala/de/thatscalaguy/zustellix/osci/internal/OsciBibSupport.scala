@@ -8,6 +8,7 @@ import de.thatscalaguy.zustellix.osci.{
 }
 
 import de.osci.osci12.OSCIException
+import de.osci.osci12.common.{OSCIErrorException, SoapServerException}
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
 import de.osci.osci12.roles.{Addressee, Originator, Role}
 
@@ -146,13 +147,45 @@ private[osci] object OsciBibSupport {
       Try(OffsetDateTime.parse(str).toInstant).orElse(Try(Instant.parse(str))).toOption
     }
 
-  /** Shared exception mapping for all osci-bibliothek blocking bodies. */
+  /** Shared exception mapping for all osci-bibliothek blocking bodies.
+   *
+   *  `OSCIErrorException` / `SoapServerException` are the SOAP-fault shape of
+   *  an error-class (`9xxx`) intermediary response; their `getErrorCode`
+   *  surfaces as [[OsciError.OsciResponse]] so the same failure is typed
+   *  identically whether it arrives as feedback rows (see [[checkFeedback]])
+   *  or as a SOAP fault (`messageId` stays `None` — no id is in scope at the
+   *  catch sites). `IllegalArgumentException` / `IllegalStateException` are
+   *  caller errors against the library API (e.g.
+   *  `FetchProcessCard.setQuantityLimit` rejecting a non-positive limit) and
+   *  map to [[OsciError.Config]]. `SoapClientException` deliberately stays
+   *  [[OsciError.OsciTransport]] — the library also raises it for locally
+   *  detected malformed responses, so its code is not a reliable
+   *  intermediary verdict.
+   */
   def toOsciError(e: Exception): Exception =
     e match {
       case e: OsciError                => e
+      case e: OSCIErrorException       => OsciError.OsciResponse(codeOf(e), detailOf(e))
+      case e: SoapServerException      => OsciError.OsciResponse(codeOf(e), detailOf(e))
       case e: OSCIException            => OsciError.OsciTransport(e)
       case e: java.io.IOException      => OsciError.OsciTransport(e)
       case e: GeneralSecurityException => OsciError.Certificate(e)
+      case e: IllegalArgumentException => OsciError.Config(reasonOf(e))
+      case e: IllegalStateException    => OsciError.Config(reasonOf(e))
       case e                           => OsciError.OsciTransport(e)
     }
+
+  // The no-arg OSCIException ctor leaves a literal "null" code; the subclass
+  // ctors always set one, but stay null-safe anyway.
+  private def codeOf(e: OSCIException): String =
+    Option(e.getErrorCode).getOrElse("")
+
+  // getMessage is the SOAP faultstring when the fault carried one;
+  // getLocalizedMessage is the library's bundle text keyed by the code (it
+  // catches lookup failures internally and may return null).
+  private def detailOf(e: OSCIException): String =
+    Option(e.getMessage).orElse(Option(e.getLocalizedMessage)).getOrElse("")
+
+  private def reasonOf(e: Exception): String =
+    Option(e.getMessage).getOrElse(e.toString)
 }

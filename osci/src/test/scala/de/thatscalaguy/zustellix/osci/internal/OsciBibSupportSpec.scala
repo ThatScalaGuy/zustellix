@@ -8,6 +8,9 @@ import de.thatscalaguy.zustellix.osci.{
 }
 import munit.FunSuite
 
+import de.osci.osci12.OSCIException
+import de.osci.osci12.common.OSCIExceptionCodes.OSCIErrorCodes
+import de.osci.osci12.common.{OSCIErrorException, SoapClientException, SoapServerException}
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
 import de.osci.osci12.roles.Originator
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
@@ -293,5 +296,88 @@ class OsciBibSupportSpec extends FunSuite {
     val ts = new Timestamp(Timestamp.PROCESS_CARD_CREATION, null, "2026-05-13T12:00:00+02:00")
     assertEquals(parseTimestamp(ts), Some(Instant.parse("2026-05-13T10:00:00Z")))
     assertEquals(parseTimestamp(null), None)
+  }
+
+  // toOsciError maps every exception escaping an osci-bibliothek blocking
+  // body. SOAP faults (OSCIErrorException / SoapServerException) carry the
+  // same 9xxx codes as feedback rows and must surface them as OsciResponse.
+
+  test("toOsciError: OSCIErrorException surfaces its OSCI error code as OsciResponse") {
+    // NoExplicitDialog carries OSCI code 9802.
+    toOsciError(new OSCIErrorException(OSCIErrorCodes.NoExplicitDialog)) match {
+      case e: OsciError.OsciResponse =>
+        assertEquals(e.code, "9802")
+        assertEquals(e.messageId, None)
+      case other => fail(s"expected OsciResponse, got $other")
+    }
+  }
+
+  test("toOsciError: SoapServerException carries code and faultstring into OsciResponse") {
+    // InternalErrorSupplier carries OSCI code 9811.
+    val fault = new SoapServerException(OSCIErrorCodes.InternalErrorSupplier, "Interner Fehler des Intermediaers")
+    toOsciError(fault) match {
+      case e: OsciError.OsciResponse =>
+        assertEquals(e.code, "9811")
+        assertEquals(e.detail, "Interner Fehler des Intermediaers")
+        assertEquals(e.messageId, None)
+      case other => fail(s"expected OsciResponse, got $other")
+    }
+  }
+
+  test("toOsciError: other OSCIExceptions stay OsciTransport with the cause preserved") {
+    // SoapClientException is deliberately NOT an OsciResponse — the library
+    // also raises it for locally detected malformed responses.
+    val client = new SoapClientException(OSCIErrorCodes.SignatureInvalid, "kaputt")
+    toOsciError(client) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq client)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+    val bare = new OSCIException("9601")
+    toOsciError(bare) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq bare)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+  }
+
+  test("toOsciError: IllegalArgumentException maps to Config with the message as reason") {
+    toOsciError(new IllegalArgumentException("invalid firstargument: 0")) match {
+      case e: OsciError.Config => assertEquals(e.reason, "invalid firstargument: 0")
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError: IllegalStateException maps to Config") {
+    toOsciError(new IllegalStateException("dialog already closed")) match {
+      case e: OsciError.Config => assertEquals(e.reason, "dialog already closed")
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError: a message-less IllegalArgumentException still yields a non-empty Config reason") {
+    toOsciError(new IllegalArgumentException()) match {
+      case e: OsciError.Config => assert(e.reason.nonEmpty)
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError passes an OsciError through unchanged") {
+    val noSuch = OsciError.NoSuchMessage("m")
+    assert(toOsciError(noSuch) eq noSuch)
+    // In particular an OsciResponse raised by checkFeedback keeps its messageId.
+    val rsp = OsciError.OsciResponse("9000", "boom", Some("msg-1"))
+    assert(toOsciError(rsp) eq rsp)
+  }
+
+  test("toOsciError: IOException stays OsciTransport, GeneralSecurityException maps to Certificate") {
+    val io = new java.io.IOException("connection reset")
+    toOsciError(io) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq io)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+    val gse = new java.security.GeneralSecurityException("bad key")
+    toOsciError(gse) match {
+      case e: OsciError.Certificate => assert(e.getCause eq gse)
+      case other                    => fail(s"expected Certificate, got $other")
+    }
   }
 }

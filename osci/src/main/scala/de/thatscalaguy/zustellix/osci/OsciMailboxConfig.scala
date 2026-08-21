@@ -12,7 +12,9 @@ import scala.concurrent.duration.FiniteDuration
  *  @param intermedCipherCert the intermediary's cipher certificate (encrypts
  *                            the envelope towards the intermediary)
  *  @param fetchLimit         maximum number of process cards one `pending`
- *                            call lists (`FetchProcessCard.setQuantityLimit`)
+ *                            call lists (`FetchProcessCard.setQuantityLimit`);
+ *                            must be > 0 — a non-positive value raises
+ *                            [[OsciError.Config]] at construction
  *  @param connectTimeout     HTTP connect timeout of the default
  *                            [[OsciHttpTransport]]; ignored when a custom
  *                            transport is passed to `OsciMailbox.resource`
@@ -30,4 +32,7 @@ final case class OsciMailboxConfig(
     connectTimeout:     FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
     readTimeout:        FiniteDuration = OsciHttpTransport.DefaultReadTimeout,
     contentSignatures:  ContentSignaturePolicy = ContentSignaturePolicy.Warn
-)
+) {
+  if fetchLimit <= 0 then
+    throw OsciError.Config(s"OsciMailboxConfig.fetchLimit must be > 0, got $fetchLimit")
+}

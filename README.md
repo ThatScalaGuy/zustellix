@@ -139,6 +139,17 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   kind when no code exists. `status.delivered` replaces "starts with `0`
 >   or `3`" checks, and `status.render` yields the previous plain string for
 >   logs and DB columns.
+> - SOAP faults from the intermediary (osci-bibliothek's
+>   `OSCIErrorException` / `SoapServerException`) now raise
+>   `OsciError.OsciResponse` with the fault's `9xxx` code instead of
+>   `OsciError.OsciTransport` — the same failure is typed identically
+>   whether it arrives as feedback rows or as a SOAP fault, and a failure
+>   `Laufzettel` records `Feedback(code)` instead of
+>   `Failed("OsciTransport")`.
+> - `IllegalArgumentException` / `IllegalStateException` escaping the OSCI
+>   library now surface as `OsciError.Config` instead of `OsciTransport`.
+> - `OsciMailboxConfig` now rejects a non-positive `fetchLimit` with
+>   `OsciError.Config` at construction.
 
 ---
 
@@ -888,12 +899,12 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
-| `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code; carries the `messageId` when one was already issued |
+| `OsciResponse`         | OSCI returned an error (`9xxx`) code — as feedback rows or as a SOAP fault; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
 | `UnsignedContent`      | received content carries no content signature and `contentSignatures = Require` |
 | `InvalidContentSignature` | the content signature on received content failed verification (raised regardless of policy) |
 | `Certificate`          | cert / key decoding failure |
-| `Config`               | bad configuration (invalid URI, unknown cert type, …) |
+| `Config`               | bad configuration (invalid URI, unknown cert type, non-positive `fetchLimit`, illegal argument/state raised by the OSCI library, …) |
 
 #### OSCI feedback codes
 
@@ -904,7 +915,7 @@ the four-digit code:
 |--------|---------|----------|
 | `0xxx` | success | normal result |
 | `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciResponse.warnings`, `OsciReceipt.warnings`, `Laufzettel.warnings`, `PendingPage.warnings` and `OsciMessage.warnings` |
-| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued) |
+| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued); the code is also extracted when the intermediary reports it as a SOAP fault |
 
 All feedback rows are inspected, so an error behind a per-language duplicate
 row fails too. A common warning is `3802` ("Signatur des Empfängers über die
