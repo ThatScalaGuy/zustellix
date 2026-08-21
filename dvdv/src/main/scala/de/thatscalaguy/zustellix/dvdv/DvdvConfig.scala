@@ -50,6 +50,12 @@ final case class DvdvConfig(
      *  self-heals cheaply via the 401 → invalidate → retry path.
      */
     defaultTokenTtl: FiniteDuration = 5.minutes,
+    /** Bounds each HTTP request attempt (acquisition of the response). Applies
+     *  to all constructors: the Ember builders via `withTimeout`, and
+     *  `fromClient` via a timeout wrapper around the provided client. With
+     *  [[failoverServers]] configured, each per-server attempt gets its own
+     *  budget.
+     */
     requestTimeout: FiniteDuration = 30.seconds,
     ignoreRevocation: Boolean = false,
     failoverServers: List[Uri] = Nil,

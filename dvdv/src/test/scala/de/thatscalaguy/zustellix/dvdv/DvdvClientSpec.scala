@@ -23,6 +23,8 @@ import org.typelevel.log4cats.noop.NoOpFactory
 import pdi.jwt.{JwtCirce, JwtOptions}
 
 import java.nio.file.Paths
+import java.util.concurrent.TimeoutException
+import scala.concurrent.duration.*
 
 class DvdvClientSpec extends CatsEffectSuite {
 
@@ -184,5 +186,31 @@ class DvdvClientSpec extends CatsEffectSuite {
                }
       subs  <- subjects.get
     } yield assertEquals(subs, List(s"fp:$oldFp", s"fp:$newFp"))
+  }
+
+  private val hangingHttp: Client[IO] = Client.fromHttpApp(HttpApp[IO](_ => IO.never))
+
+  private val shortTimeoutCfg = DvdvConfig(
+    baseUri        = uri"http://dvdv.test",
+    entryPath      = DvdvEntryPath.InternDirectory, // no cert, no token POST
+    requestTimeout = 200.millis,
+    cacheConfig    = CacheConfig.disabled
+  )
+
+  test("fromClient applies config.requestTimeout to the provided client") {
+    interceptIO[TimeoutException](
+      DvdvClient.fromClient[IO](shortTimeoutCfg, hangingHttp).use(_.serviceVersion)
+    )
+  }
+
+  test("fromClient with a CertManager applies config.requestTimeout") {
+    val alias = CertAlias("tenant")
+    for {
+      p12   <- TestCerts.mintP12("t")
+      certs <- InMemoryCertManager.make[IO](Map(alias -> CertCredential(p12, TestCerts.password)))
+      _     <- interceptIO[TimeoutException](
+                 DvdvClient.fromClient[IO](shortTimeoutCfg, hangingHttp, certs, alias).use(_.serviceVersion)
+               )
+    } yield ()
   }
 }

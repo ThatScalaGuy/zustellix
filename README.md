@@ -319,7 +319,8 @@ DvdvClient.resource[IO](config)
 // Ember-backed, signing cert resolved from a shared CertManager by alias:
 DvdvClient.resource[IO](config, certManager, CertAlias("flensburg"))
 
-// Bring your own http4s Client (tests, non-Ember backends; needs Async):
+// Bring your own http4s Client (tests, non-Ember backends; needs Async).
+// config.requestTimeout is applied around the provided client:
 DvdvClient.fromClient[IO](config, myClient)
 DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
@@ -355,7 +356,7 @@ val config = DvdvConfig(
   jwtLifetime      = 60.seconds,      // client_assertion lifetime
   tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry (clamped to at most half the token TTL)
   defaultTokenTtl  = 5.minutes,       // token lifetime assumed when the token response has no expires_in
-  requestTimeout   = 30.seconds,
+  requestTimeout   = 30.seconds,      // per request attempt; applied by every constructor, incl. fromClient
 
   cacheConfig = CacheConfig(
     categoriesTtl               = 2.hours,     // override any subset
