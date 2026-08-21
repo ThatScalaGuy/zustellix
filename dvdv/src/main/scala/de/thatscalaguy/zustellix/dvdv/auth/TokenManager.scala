@@ -17,7 +17,12 @@ import java.time.Instant
 
 trait TokenManager[F[_]] {
   def bearer: F[String]
-  def invalidate: F[Unit]
+
+  /** Drops the cached token only if it still equals `stale` — the token that
+   *  provoked the 401. A token refreshed concurrently by another fiber does not
+   *  match and survives, so parallel 401s cannot stampede the token endpoint.
+   */
+  def invalidate(stale: String): F[Unit]
 }
 
 object TokenManager {
@@ -59,8 +64,11 @@ object TokenManager {
         }
       }
 
-    def invalidate: F[Unit] =
-      state.set(None)
+    def invalidate(stale: String): F[Unit] =
+      state.update {
+        case Some(t) if t.value == stale => None
+        case other                       => other
+      }
 
     private def refresh: F[String] =
       mutex.lock.surround {

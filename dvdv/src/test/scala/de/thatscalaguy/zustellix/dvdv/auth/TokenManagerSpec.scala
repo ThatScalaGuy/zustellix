@@ -130,12 +130,72 @@ class TokenManagerSpec extends CatsEffectSuite {
                loaded
              )
       first <- tm.bearer
-      _     <- tm.invalidate
+      _     <- tm.invalidate(first)
       again <- tm.bearer
       n     <- rec.count.get
     } yield {
       assertEquals(first, "tok-1")
       assertEquals(again, "tok-2")
+      assertEquals(n, 2)
+    }
+  }
+
+  test("invalidate with a non-matching token keeps the cached token (no re-fetch)") {
+    for {
+      rec <- recorder
+      tm  <- TokenManager.make[IO](
+               tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
+               config,
+               loaded
+             )
+      first <- tm.bearer
+      _     <- tm.invalidate("not-the-cached-token")
+      again <- tm.bearer
+      n     <- rec.count.get
+    } yield {
+      assertEquals(first, "tok-1")
+      assertEquals(again, "tok-1")
+      assertEquals(n, 1)
+    }
+  }
+
+  test("stale invalidation after a refresh is a no-op (no second re-fetch)") {
+    for {
+      rec <- recorder
+      tm  <- TokenManager.make[IO](
+               tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
+               config,
+               loaded
+             )
+      first <- tm.bearer
+      _     <- tm.invalidate(first)
+      fresh <- tm.bearer
+      _     <- tm.invalidate(first) // a second fiber's late 401 carrying the OLD token
+      again <- tm.bearer
+      n     <- rec.count.get
+    } yield {
+      assertEquals(first, "tok-1")
+      assertEquals(fresh, "tok-2")
+      assertEquals(again, "tok-2")
+      assertEquals(n, 2)
+    }
+  }
+
+  test("stampede: concurrent 401s carrying the old token trigger exactly one refresh") {
+    val N = 32
+    for {
+      rec <- recorder
+      tm  <- TokenManager.make[IO](
+               tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
+               config,
+               loaded
+             )
+      old  <- tm.bearer // tok-1, POST 1
+      toks <- (tm.invalidate(old) *> tm.bearer).parReplicateA(N)
+      n    <- rec.count.get
+    } yield {
+      assertEquals(old, "tok-1")
+      assertEquals(toks.toSet, Set("tok-2"))
       assertEquals(n, 2)
     }
   }
@@ -170,10 +230,10 @@ class TokenManagerSpec extends CatsEffectSuite {
                     resolves.update(_ + 1) *> loaded
                   )
       n0 <- resolves.get
-      _  <- tm.bearer
+      t1 <- tm.bearer
       _  <- tm.bearer // still cached — no new resolution
       n1 <- resolves.get
-      _  <- tm.invalidate
+      _  <- tm.invalidate(t1)
       _  <- tm.bearer
       n2 <- resolves.get
     } yield {
@@ -194,10 +254,10 @@ class TokenManagerSpec extends CatsEffectSuite {
                    config,
                    current.get
                  )
-      _  <- tm.bearer
+      t1 <- tm.bearer
       a1 <- lastAssertion(rec)
       _  <- current.set(rotated) // the rotation
-      _  <- tm.invalidate        // e.g. the AuthMiddleware 401 path
+      _  <- tm.invalidate(t1)    // e.g. the AuthMiddleware 401 path
       _  <- tm.bearer
       a2 <- lastAssertion(rec)
     } yield {
