@@ -88,7 +88,9 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
 
   /** Fetch message types require an explicit dialog (the library enforces a
    *  ConversationID): InitDialog first, ExitDialog best-effort afterwards —
-   *  see [[OsciBibSupport.withExplicitDialog]].
+   *  see [[OsciBibSupport.withExplicitDialog]]. The InitDialog response's
+   *  feedback is checked there: a `9xxx` dialog refusal raises
+   *  [[OsciError.OsciResponse]] before FetchProcessCard/FetchDelivery run.
    */
   private def withDialog[A](f: DialogHandler => A): A = {
     val intermed = new Intermed(null, config.intermedCipherCert, config.intermedUri)

@@ -23,7 +23,9 @@ class OsciBibBridgeIT extends CatsEffectSuite {
   test("mediate reaches the configured gateway".ignore) {
     // TODO: build an Originator from OSCI_IT_P12, construct an OsciRoute
     // pointing at sys.env("OSCI_IT_GATEWAY"), call transport.mediate(), and
-    // assert a non-empty response XML.
+    // assert a non-empty response XML. An InitDialog refusal must surface as
+    // OsciError.OsciResponse (with the messageId), not as a confusing
+    // secondary error from MediateDelivery.
     IO.unit
   }
 
@@ -34,6 +36,8 @@ class OsciBibBridgeIT extends CatsEffectSuite {
     //  3. fetch(messageId) must return the sent payload (decrypted)
     //  4. pending must no longer list the messageId — the reception entry
     //     recorded at fetch time IS the acknowledgement
+    // As for mediate, an InitDialog refusal must surface as
+    // OsciError.OsciResponse, not as a confusing secondary error.
     IO.unit
   }
 

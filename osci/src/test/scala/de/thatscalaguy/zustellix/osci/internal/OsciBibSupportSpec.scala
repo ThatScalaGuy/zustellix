@@ -277,13 +277,17 @@ class OsciBibSupportSpec extends FunSuite {
   }
 
   // withExplicitDialog is the explicit-dialog lifecycle of the bridges:
-  // InitDialog, body, best-effort ExitDialog. The thunk overload is the
-  // offline seam — a real InitDialog/ExitDialog send needs a parseable
+  // InitDialog (whose response feedback is checked — a 9xxx refusal aborts
+  // before the body), body, best-effort ExitDialog. The thunk overload is
+  // the offline seam — a real InitDialog/ExitDialog send needs a parseable
   // intermediary response and stays in the gated `OsciBibBridgeIT`.
 
   test("withExplicitDialog runs init, body, exit in order and returns the body's result") {
     val calls = scala.collection.mutable.ListBuffer.empty[String]
-    val out = withExplicitDialog(() => { calls += "init"; () }, () => { calls += "exit"; () }) {
+    val out = withExplicitDialog(
+      () => { calls += "init"; Array(Array("de", "0801", "dialog ok")) },
+      () => { calls += "exit"; () }
+    ) {
       calls += "body"
       42
     }
@@ -291,10 +295,48 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(calls.toList, List("init", "body", "exit"))
   }
 
+  test("withExplicitDialog checks the InitDialog response feedback: a 9xxx refusal raises OsciResponse and neither body nor exit runs") {
+    // 9802 = no explicit dialog — the intermediary refused to open one.
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(
+        () => Array(Array("de", "9802", "dialog refused")),
+        () => { calls += "exit"; () }
+      ) {
+        calls += "body"
+      }
+    }
+    assertEquals(e.code, "9802")
+    assertEquals(e.messageId, None)
+    assertEquals(calls.toList, Nil)
+  }
+
+  test("withExplicitDialog attaches the caller's messageId to an init refusal") {
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(
+        () => Array(Array("de", "9802", "dialog refused")),
+        () => (),
+        Some("msg-1")
+      )(42)
+    }
+    assertEquals(e.code, "9802")
+    assertEquals(e.messageId, Some("msg-1"))
+  }
+
+  test("withExplicitDialog: warning-class (3xxx) init feedback does not abort the dialog") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val out = withExplicitDialog(
+      () => Array(Array("de", "3802", "Signatur des Empfängers fehlt")),
+      () => { calls += "exit"; () }
+    )(42)
+    assertEquals(out, 42)
+    assertEquals(calls.toList, List("exit"))
+  }
+
   test("withExplicitDialog still sends exit when the body raises, and the body's exception propagates") {
     val calls = scala.collection.mutable.ListBuffer.empty[String]
     val e = intercept[OsciError.OsciResponse] {
-      withExplicitDialog(() => (), () => { calls += "exit"; () }) {
+      withExplicitDialog(() => null, () => { calls += "exit"; () }) {
         checkFeedback(Array(Array("de", "9000", "boom")), Some("msg-1"))
       }
     }
@@ -304,13 +346,13 @@ class OsciBibSupportSpec extends FunSuite {
   }
 
   test("withExplicitDialog: a NonFatal exit failure is swallowed (best-effort cleanup)") {
-    val out = withExplicitDialog(() => (), () => throw new RuntimeException("exit boom"))(42)
+    val out = withExplicitDialog(() => null, () => throw new RuntimeException("exit boom"))(42)
     assertEquals(out, 42)
   }
 
   test("withExplicitDialog: an exit failure does not mask the body's exception") {
     val e = intercept[OsciError.OsciResponse] {
-      withExplicitDialog(() => (), () => throw new RuntimeException("exit boom")) {
+      withExplicitDialog(() => null, () => throw new RuntimeException("exit boom")) {
         throw OsciError.OsciResponse("9000", "delivery rejected", Some("msg-1"))
       }
     }
@@ -331,7 +373,7 @@ class OsciBibSupportSpec extends FunSuite {
     // munit's intercept itself only catches NonFatal, so catch by hand.
     val propagated =
       try {
-        withExplicitDialog(() => (), () => throw new InterruptedException())(42)
+        withExplicitDialog(() => null, () => throw new InterruptedException())(42)
         false
       }
       catch case _: InterruptedException => true

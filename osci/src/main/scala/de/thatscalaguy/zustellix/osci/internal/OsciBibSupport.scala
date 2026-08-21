@@ -141,24 +141,40 @@ private[osci] object OsciBibSupport {
   }
 
   /** Explicit-dialog lifecycle shared by the bridges: `body` runs between an
-   *  `InitDialog` and a best-effort `ExitDialog`. The exit is attempted
-   *  exactly when the init succeeded — a failed delivery (send error, 9xxx
-   *  feedback) must not leave the dialog open at the intermediary. A NonFatal
-   *  exit failure is swallowed so the body's outcome (result or exception)
-   *  wins.
+   *  `InitDialog` and a best-effort `ExitDialog`. The `InitDialog` response's
+   *  feedback is run through [[checkFeedback]] before the body — a `9xxx`
+   *  feedback (dialog refused, certificate rejected) raises
+   *  [[OsciError.OsciResponse]] carrying `messageId` when the caller already
+   *  holds one, and neither the body nor `ExitDialog` runs since no dialog
+   *  was opened. The exit is attempted exactly when the init succeeded (sent
+   *  and not `9xxx`-refused) — a failed delivery (send error, 9xxx feedback)
+   *  must not leave the dialog open at the intermediary. A NonFatal exit
+   *  failure is swallowed so the body's outcome (result or exception) wins.
    */
-  def withExplicitDialog[A](dialog: DialogHandler)(body: => A): A =
+  def withExplicitDialog[A](dialog: DialogHandler, messageId: Option[String] = None)(
+      body: => A
+  ): A =
     withExplicitDialog(
-      () => { new InitDialog(dialog).send(); () },
-      () => { new ExitDialog(dialog).send(); () }
+      () => new InitDialog(dialog).send().getFeedback,
+      () => { new ExitDialog(dialog).send(); () },
+      messageId
     )(body)
 
   /** Thunk seam for the overload above so the lifecycle is unit-testable
    *  without a gateway (a real InitDialog/ExitDialog send needs a parseable
-   *  intermediary response).
+   *  intermediary response). `init` returns the feedback rows of the init
+   *  response, which are checked here via [[checkFeedback]]. (No default for
+   *  `messageId` — Scala allows defaults on only one overloaded variant.)
    */
-  def withExplicitDialog[A](init: () => Unit, exit: () => Unit)(body: => A): A = {
-    init()
+  def withExplicitDialog[A](init: () => Array[Array[String]], exit: () => Unit)(body: => A): A =
+    withExplicitDialog(init, exit, None)(body)
+
+  def withExplicitDialog[A](
+      init: () => Array[Array[String]],
+      exit: () => Unit,
+      messageId: Option[String]
+  )(body: => A): A = {
+    checkFeedback(init(), messageId)
     try body
     finally {
       try exit()

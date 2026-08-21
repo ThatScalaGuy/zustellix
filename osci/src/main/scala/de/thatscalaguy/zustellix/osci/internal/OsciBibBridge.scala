@@ -107,7 +107,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         val msgIdResp = new GetMessageId(dialog).send()
         checkFeedback(msgIdResp.getFeedback)
 
-        val rsp = withExplicitDialog(dialog) {
+        val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
           val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
           mediate.setMessageId(msgIdResp.getMessageId)
           mediate.setSubject(subject)
@@ -156,7 +156,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         val msgIdResp = new GetMessageId(dialog).send()
         checkFeedback(msgIdResp.getFeedback)
 
-        val rsp = withExplicitDialog(dialog) {
+        val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
           val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
           storeDelivery.setSubject(subject)
           storeDelivery.setQualityOfTimeStampCreation(false)
