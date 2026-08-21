@@ -244,7 +244,9 @@ transient per-file failure — a keystore read mid-overwrite during rotation,
 or a password entry that has not landed yet — retains the previously loaded
 credential instead of dropping the tenant, with the failure logged each scan
 until the file loads again; an alias is dropped only when its `.p12` file is
-deleted from the directory (observed at the next scan). Rotate files
+deleted from the directory (observed at the next scan). The `.p12` extension
+is matched case-insensitively, and a bare `.p12` file (empty alias) or a
+directory named like a keystore is ignored. Rotate files
 atomically — write to a temp file in the same directory, then
 `Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE)` — since
 `cp`/`scp`/configmap-style sync is not atomic, and a torn file would

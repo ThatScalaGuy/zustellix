@@ -196,6 +196,70 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
+  test("an upper-case .P12 extension is picked up with its case-preserved stem as alias") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               Files.write(dir.resolve("FOO.P12"), mintP12("FOO", "pw-f"))
+               writePasswords(dir.resolve("passwords.properties"), "FOO" -> "pw-f")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir)).use { mgr =>
+               for {
+                 cred    <- mgr.resolve(CertAlias("FOO"))
+                 aliases <- mgr.knownAliases
+               } yield (cred, aliases)
+             }
+    } yield {
+      val (cred, aliases) = out
+      assertEquals(cred.password, "pw-f")
+      assertEquals(aliases, Set(CertAlias("FOO")))
+    }
+  }
+
+  test("a file named exactly .p12 is ignored (no empty alias)") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               Files.write(dir.resolve(".p12"), mintP12("x", "pw-x"))
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir)).use { mgr =>
+               for {
+                 empty   <- mgr.resolve(CertAlias("")).attempt
+                 aliases <- mgr.knownAliases
+               } yield (empty, aliases)
+             }
+    } yield {
+      val (empty, aliases) = out
+      assert(empty.isLeft, "a bare .p12 must not surface an empty alias")
+      assertEquals(aliases, Set(CertAlias("alice")))
+    }
+  }
+
+  test("a directory named like a keystore is ignored") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               Files.createDirectory(dir.resolve("bogus.p12"))
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir)).use { mgr =>
+               for {
+                 alice   <- mgr.resolve(CertAlias("alice")).attempt
+                 bogus   <- mgr.resolve(CertAlias("bogus")).attempt
+                 aliases <- mgr.knownAliases
+               } yield (alice, bogus, aliases)
+             }
+    } yield {
+      val (alice, bogus, aliases) = out
+      assert(alice.isRight, s"alice should still resolve, got $alice")
+      assert(bogus.isLeft, "a directory named bogus.p12 must not load")
+      assertEquals(aliases, Set(CertAlias("alice")))
+    }
+  }
+
   test("hot reload: a new alias appears and a rotated credential changes after one interval") {
     val interval = 150.millis
     for {

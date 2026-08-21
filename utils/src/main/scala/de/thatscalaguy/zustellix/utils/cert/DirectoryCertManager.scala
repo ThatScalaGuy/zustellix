@@ -10,7 +10,10 @@ import java.nio.file.{Files, Path}
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
-/** @param dir           folder scanned for `<alias>.p12` keystores
+/** @param dir           folder scanned for `<alias>.p12` keystores — the
+ *                        extension is matched case-insensitively, and only
+ *                        regular files with a non-empty alias stem are
+ *                        considered
  *  @param interval       poll period (rebuilds the map every `interval`)
  *  @param passwordsFile  optional `java.util.Properties` of `<alias>=<password>`;
  *                        defaults to `<dir>/passwords.properties`
@@ -145,7 +148,12 @@ object DirectoryCertManager {
       val s = Files.list(dir)
       try
         s.iterator().asScala
-          .filter(_.getFileName.toString.endsWith(".p12"))
+          .filter { p =>
+            val name = p.getFileName.toString
+            name.toLowerCase(java.util.Locale.ROOT).endsWith(".p12") &&
+            name.length > ".p12".length &&
+            Files.isRegularFile(p)
+          }
           .toList
       finally s.close()
     }
