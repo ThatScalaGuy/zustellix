@@ -150,6 +150,13 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   library now surface as `OsciError.Config` instead of `OsciTransport`.
 > - `OsciMailboxConfig` now rejects a non-positive `fetchLimit` with
 >   `OsciError.Config` at construction.
+> - A DVDV service element with a missing or blank `serviceElementUri` now
+>   fails at resolve time with `OsciError.ServiceElementMissing` instead of
+>   surfacing much later as a mislabeled `OsciError.OsciTransport` from
+>   inside the transport. And the intermediary's cipher certificate may now
+>   be supplied by a standalone `CIPHER_CERTIFICATE` element with the same
+>   `serviceElementDescriptionName` — the fallback the addressee already
+>   had; previously that shape raised `RecipientCertMissing`.
 
 ---
 
@@ -897,7 +904,7 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `InvalidAgs`           | the given string is not a well-formed 8-digit AGS (raised by the `Ags` smart constructors) |
 | `AgsNotInDvdv`         | DVDV has no service registered for the AGS + service URI |
 | `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
-| `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
+| `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent or carries no `serviceElementUri` |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned an error (`9xxx`) code — as feedback rows or as a SOAP fault; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |

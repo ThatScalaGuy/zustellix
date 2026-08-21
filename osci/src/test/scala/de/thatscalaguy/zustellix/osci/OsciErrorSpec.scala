@@ -31,6 +31,14 @@ class OsciErrorSpec extends FunSuite {
     assertEquals(e.kind, "OSCI_ADDRESSEE")
   }
 
+  test("ServiceElementMissing message includes the AGS and the element kind") {
+    val e = OsciError.ServiceElementMissing(Ags.unsafe("01001000"), "OSCI_INTERMEDIARY")
+    assert(e.getMessage.contains("01001000"))
+    assert(e.getMessage.contains("OSCI_INTERMEDIARY"))
+    assertEquals(e.ags, Ags.unsafe("01001000"))
+    assertEquals(e.kind, "OSCI_INTERMEDIARY")
+  }
+
   test("OsciTransport preserves the cause") {
     val cause = new IOException("boom")
     val e     = OsciError.OsciTransport(cause)

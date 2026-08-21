@@ -28,9 +28,13 @@ object OsciError {
         s"DVDV service description for AGS '${ags.value}' has no cipher certificate for '$kind'"
       )
 
+  /** The service description resolved for `ags` has no usable service
+   *  element of type `kind` (`OSCI_ADDRESSEE` or `OSCI_INTERMEDIARY`): the
+   *  element is absent, or present without a non-blank `serviceElementUri`.
+   */
   final case class ServiceElementMissing(ags: Ags, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '${ags.value}' is missing service element of type '$kind'"
+        s"DVDV service description for AGS '${ags.value}' has no usable service element of type '$kind'"
       )
 
   final case class OsciTransport(cause: Throwable)

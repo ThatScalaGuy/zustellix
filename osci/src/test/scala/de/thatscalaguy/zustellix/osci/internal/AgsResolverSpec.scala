@@ -73,13 +73,13 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   private def element(
       kind:      ServiceElementType,
-      uri:       String,
+      uri:       Option[String],
       cipherB64: Option[String],
       name:      Option[String] = None
   ): ServiceElementInfo =
     ServiceElementInfo(
       serviceElementType            = Some(kind),
-      serviceElementUri             = Some(uri),
+      serviceElementUri             = uri,
       cipherCertificate             = cipherB64.map(b => Certificate(content = Some(b))),
       serviceElementDescriptionName = name,
       serviceElementId              = Some(7L),
@@ -100,8 +100,8 @@ class AgsResolverSpec extends CatsEffectSuite {
     val dvdv = stubDvdv {
       case ("ags:01001000", "http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl") =>
         IO.pure(Some(serviceWithElements(List(
-          element(ServiceElementType.OSCI_ADDRESSEE,    "https://recipient/osci", Some(testCertB64)),
-          element(ServiceElementType.OSCI_INTERMEDIARY, "https://intermed/osci",  Some(testCertB64))
+          element(ServiceElementType.OSCI_ADDRESSEE,    Some("https://recipient/osci"), Some(testCertB64)),
+          element(ServiceElementType.OSCI_INTERMEDIARY, Some("https://intermed/osci"),  Some(testCertB64))
         ))))
       case other => IO.raiseError(new AssertionError(s"unexpected: $other"))
     }
@@ -125,7 +125,7 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("resolve raises ServiceElementMissing when OSCI_INTERMEDIARY is absent") {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
-      element(ServiceElementType.OSCI_ADDRESSEE, "https://recipient/osci", Some(testCertB64))
+      element(ServiceElementType.OSCI_ADDRESSEE, Some("https://recipient/osci"), Some(testCertB64))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(OsciError.ServiceElementMissing(TestAgs, "OSCI_INTERMEDIARY")) => ()
@@ -135,8 +135,8 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("resolve raises RecipientCertMissing when an element has no cipher cert") {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
-      element(ServiceElementType.OSCI_ADDRESSEE,    "https://recipient/osci", None),
-      element(ServiceElementType.OSCI_INTERMEDIARY, "https://intermed/osci",  Some(testCertB64))
+      element(ServiceElementType.OSCI_ADDRESSEE,    Some("https://recipient/osci"), None),
+      element(ServiceElementType.OSCI_INTERMEDIARY, Some("https://intermed/osci"),  Some(testCertB64))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
@@ -148,9 +148,9 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("addressee inline cipher wins over a foreign standalone CIPHER_CERTIFICATE element") {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
-      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", Some(testCertB64),  name = Some("addr")),
-      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
-      element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), Some(testCertB64),  name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://other/cipher"),   Some(otherCertB64), name = Some("intm"))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
       assert(route.addresseeCipher.getEncoded.sameElements(certBytes(testCertB64)),
@@ -160,9 +160,9 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("addressee falls back to a standalone CIPHER_CERTIFICATE with a matching name") {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
-      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", None,               name = Some("addr")),
-      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
-      element(ServiceElementType.CIPHER_CERTIFICATE, "https://addr/cipher",    Some(otherCertB64), name = Some("addr"))
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), None,               name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://addr/cipher"),    Some(otherCertB64), name = Some("addr"))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
       assert(route.addresseeCipher.getEncoded.sameElements(certBytes(otherCertB64)),
@@ -172,14 +172,74 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("addressee raises RecipientCertMissing when the only standalone cipher has a non-matching name") {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
-      element(ServiceElementType.OSCI_ADDRESSEE,     "https://recipient/osci", None,               name = Some("addr")),
-      element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
-      element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), None,               name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://other/cipher"),   Some(otherCertB64), name = Some("intm"))
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
         assertEquals(e.ags, TestAgs)
         assertEquals(e.kind, "OSCI_ADDRESSEE")
+      case other => fail(s"unexpected: $other")
+    }
+  }
+
+  test("resolve raises ServiceElementMissing when the addressee has no serviceElementUri") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,    None,                           Some(testCertB64)),
+      element(ServiceElementType.OSCI_INTERMEDIARY, Some("https://intermed/osci"),  Some(testCertB64))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
+      case Left(OsciError.ServiceElementMissing(TestAgs, "OSCI_ADDRESSEE")) => ()
+      case other                                                                 => fail(s"unexpected: $other")
+    }
+  }
+
+  test("resolve raises ServiceElementMissing when the intermediary URI is blank") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,    Some("https://recipient/osci"), Some(testCertB64)),
+      element(ServiceElementType.OSCI_INTERMEDIARY, Some("   "),                    Some(testCertB64))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
+      case Left(OsciError.ServiceElementMissing(TestAgs, "OSCI_INTERMEDIARY")) => ()
+      case other                                                                    => fail(s"unexpected: $other")
+    }
+  }
+
+  test("intermediary inline cipher wins over a standalone CIPHER_CERTIFICATE element") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), Some(testCertB64),  name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  Some(testCertB64),  name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://other/cipher"),   Some(otherCertB64), name = Some("intm"))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
+      assert(route.intermedCipher.getEncoded.sameElements(certBytes(testCertB64)),
+             "intermediary cipher must be the inline cert, not the standalone one")
+    }
+  }
+
+  test("intermediary falls back to a standalone CIPHER_CERTIFICATE with a matching name") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), Some(testCertB64),  name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  None,               name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://intm/cipher"),    Some(otherCertB64), name = Some("intm"))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
+      assert(route.intermedCipher.getEncoded.sameElements(certBytes(otherCertB64)),
+             "intermediary cipher must be the matching standalone cert")
+    }
+  }
+
+  test("intermediary raises RecipientCertMissing when the only standalone cipher has a non-matching name") {
+    val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
+      element(ServiceElementType.OSCI_ADDRESSEE,     Some("https://recipient/osci"), Some(testCertB64),  name = Some("addr")),
+      element(ServiceElementType.OSCI_INTERMEDIARY,  Some("https://intermed/osci"),  None,               name = Some("intm")),
+      element(ServiceElementType.CIPHER_CERTIFICATE, Some("https://other/cipher"),   Some(otherCertB64), name = Some("addr"))
+    )))))
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
+      case Left(e: OsciError.RecipientCertMissing) =>
+        assertEquals(e.ags, TestAgs)
+        assertEquals(e.kind, "OSCI_INTERMEDIARY")
       case other => fail(s"unexpected: $other")
     }
   }
