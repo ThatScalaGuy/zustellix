@@ -8,10 +8,15 @@ import cats.effect.Sync
  *  osci-bibliothek needs a fresh `InputStream` + password to build its
  *  `PKCS12Signer`/`PKCS12Decrypter`, while DVDV derives a [[LoadedCert]]
  *  (private key + X509) from the same bytes to sign its `client_assertion` JWT.
+ *
+ *  `toString` is redacted: the value carries a password and is the one most
+ *  likely to end up in a log line.
  */
 final case class CertCredential(pkcs12: Array[Byte], password: String) {
   def loadedCert[F[_]: Sync]: F[LoadedCert] =
     CertLoader.loadPkcs12Bytes[F](pkcs12, password)
+
+  override def toString: String = s"CertCredential(${pkcs12.length} bytes, <redacted>)"
 }
 
 sealed abstract class CertManagerError(msg: String) extends RuntimeException(msg)
