@@ -2,7 +2,7 @@ package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
-import de.thatscalaguy.zustellix.dvdv.{DvdvConfig, DvdvError}
+import de.thatscalaguy.zustellix.dvdv.{DvdvConfig, DvdvError, TestCerts}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertSource, LoadedCert}
 import io.circe.Json
 import munit.CatsEffectSuite
@@ -11,6 +11,7 @@ import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
+import pdi.jwt.{Jwt, JwtAlgorithm, JwtCirce, JwtOptions}
 
 import java.nio.file.Paths
 
@@ -57,11 +58,10 @@ class TokenManagerSpec extends CatsEffectSuite {
   test("happy path: posts the jwt-bearer form and returns the access token") {
     for {
       rec <- recorder
-      l   <- loaded
       tm  <- TokenManager.make[IO](
                tokenClient(rec)(_ => Ok(accessTokenJson("tok-123", 3600))),
                config,
-               l
+               loaded
              )
       tok  <- tm.bearer
       n    <- rec.count.get
@@ -89,11 +89,10 @@ class TokenManagerSpec extends CatsEffectSuite {
     )
     for {
       rec <- recorder
-      l   <- loaded
       tm  <- TokenManager.make[IO](
                tokenClient(rec)(_ => IO(Response[IO](Status.Unauthorized).withEntity(problem))),
                config,
-               l
+               loaded
              )
       res <- tm.bearer.attempt
     } yield res match {
@@ -106,11 +105,10 @@ class TokenManagerSpec extends CatsEffectSuite {
   test("caching: two bearer calls within the skew window trigger exactly one POST") {
     for {
       rec <- recorder
-      l   <- loaded
       tm  <- TokenManager.make[IO](
                tokenClient(rec)(_ => Ok(accessTokenJson("cached", 3600))),
                config,
-               l
+               loaded
              )
       a <- tm.bearer
       b <- tm.bearer
@@ -125,12 +123,11 @@ class TokenManagerSpec extends CatsEffectSuite {
   test("invalidate forces the next bearer to re-fetch (a second POST)") {
     for {
       rec <- recorder
-      l   <- loaded
       tm  <- TokenManager.make[IO](
                // each acquisition returns a distinct token so the refresh is observable
                tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
                config,
-               l
+               loaded
              )
       first <- tm.bearer
       _     <- tm.invalidate
@@ -147,17 +144,75 @@ class TokenManagerSpec extends CatsEffectSuite {
     val N = 32
     for {
       rec <- recorder
-      l   <- loaded
       tm  <- TokenManager.make[IO](
                tokenClient(rec)(_ => Ok(accessTokenJson("once", 3600))),
                config,
-               l
+               loaded
              )
       toks <- tm.bearer.parReplicateA(N)
       n    <- rec.count.get
     } yield {
       assertEquals(toks.toSet, Set("once"))
       assertEquals(n, 1)
+    }
+  }
+
+  private def lastAssertion(rec: Recorder): IO[String] =
+    rec.lastForm.get.map(_.flatMap(_.values.get("client_assertion")).flatMap(_.headOption).get)
+
+  test("the cert is resolved once per token acquisition, not at construction") {
+    for {
+      rec      <- recorder
+      resolves <- Ref.of[IO, Int](0)
+      tm       <- TokenManager.make[IO](
+                    tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
+                    config,
+                    resolves.update(_ + 1) *> loaded
+                  )
+      n0 <- resolves.get
+      _  <- tm.bearer
+      _  <- tm.bearer // still cached — no new resolution
+      n1 <- resolves.get
+      _  <- tm.invalidate
+      _  <- tm.bearer
+      n2 <- resolves.get
+    } yield {
+      assertEquals(n0, 0)
+      assertEquals(n1, 1)
+      assertEquals(n2, 2)
+    }
+  }
+
+  test("rotation: each token refresh signs the client_assertion with the freshly resolved cert") {
+    for {
+      rec     <- recorder
+      old     <- loaded
+      rotated <- TestCerts.mintLoadedCert("rotated")
+      current <- Ref.of[IO, LoadedCert](old)
+      tm      <- TokenManager.make[IO](
+                   tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 3600))),
+                   config,
+                   current.get
+                 )
+      _  <- tm.bearer
+      a1 <- lastAssertion(rec)
+      _  <- current.set(rotated) // the rotation
+      _  <- tm.invalidate        // e.g. the AuthMiddleware 401 path
+      _  <- tm.bearer
+      a2 <- lastAssertion(rec)
+    } yield {
+      def subject(jwt: String): Option[String] =
+        JwtCirce.decode(jwt, JwtOptions(signature = false)).toOption.flatMap(_.subject)
+      assertEquals(subject(a1), Some(s"fp:${old.fingerprintSha1Hex}"))
+      assertEquals(subject(a2), Some(s"fp:${rotated.fingerprintSha1Hex}"))
+      assert(
+        Jwt.isValid(a2, rotated.certificate.getPublicKey, Seq(JwtAlgorithm.RS256)),
+        "assertion after rotation must verify against the rotated key"
+      )
+      assert(
+        !Jwt.isValid(a2, old.certificate.getPublicKey, Seq(JwtAlgorithm.RS256)),
+        "assertion after rotation must no longer verify against the old key"
+      )
     }
   }
 }

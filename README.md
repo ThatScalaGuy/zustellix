@@ -296,6 +296,12 @@ DvdvClient.fromClient[IO](config, myClient)
 DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
 
+On the `CertManager` overloads the alias is resolved once at build time (so an
+unknown alias fails fast) and then again on every token refresh — a cert
+rotated in the manager (e.g. by `DirectoryCertManager`) signs the next
+`client_assertion` without a restart. The `certSource` constructors load the
+cert once and keep it for the lifetime of the client.
+
 ### Configuration
 
 ```scala
