@@ -844,6 +844,16 @@ yield osci).use(_.request(Ags.unsafe("01001000"), "<xmeld>...</xmeld>"))
 OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 ```
 
+On the `CertManager` overloads (`OsciClient.resource(..., certManager, alias,
+...)` and `OsciMailbox.resource(config, certManager, alias)`) the alias is
+resolved once at build time (so an unknown alias fails fast) and then again on
+every operation — a cert rotated in the manager (e.g. by
+`DirectoryCertManager`) signs and decrypts the next `request` / `send` /
+`pending` / `fetch` without a rebuild; the built OSCI Originator is cached and
+only rebuilt when the credential actually changes. The `certSource`-based
+constructors load the cert once and keep it for the lifetime of the
+client/mailbox.
+
 ### Laufzettel
 
 Each `request` / `send` produces a `Laufzettel(messageId, timestamp,

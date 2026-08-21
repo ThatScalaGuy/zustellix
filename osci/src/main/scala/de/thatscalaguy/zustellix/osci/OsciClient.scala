@@ -38,6 +38,9 @@ object OsciClient {
    *  The given DvdvClient is owned by the caller; this resource does not
    *  close it.
    *
+   *  `config.certSource` is loaded once and kept for the lifetime of the
+   *  client — use the `CertManager` overload for a cert that can rotate.
+   *
    *  Uses an [[OsciHttpTransport]] with the config's `connectTimeout` /
    *  `readTimeout` on the wire; the `transport` overload swaps it for a
    *  custom one.
@@ -78,6 +81,12 @@ object OsciClient {
    *  cert is resolved from the shared [[CertManager]] by [[CertAlias]] — the
    *  same cert the matching [[DvdvClient]] uses. The Laufzettel is recorded
    *  under the alias as its tenant id.
+   *
+   *  The alias is resolved once at build time to fail fast on a missing cert
+   *  or unopenable keystore, and again on every `request` / `send` — so a
+   *  cert rotated in the manager (e.g. a hot-reloading `DirectoryCertManager`)
+   *  is picked up without rebuilding the client. The built OSCI Originator is
+   *  cached and only rebuilt when the credential actually changes.
    */
   def resource[F[_]: Async](
       config: OsciConfig,
@@ -100,12 +109,12 @@ object OsciClient {
       transport: TransportI
   ): Resource[F, OsciClient[F]] = {
     val resolver = internal.AgsResolver[F](dvdv, config)
-    for {
-      cred   <- Resource.eval(certs.resolve(alias))
-      bridge <- internal.OsciBibBridge.resource[F](cred, transport, config.contentSignatures)
-    } yield new internal.OsciClientImpl[F](
-      TenantId(alias.value), config.subject, bridge, resolver, sink, config.capturePayloads
-    )
+    internal.OsciBibBridge.resource[F](certs, alias, transport, config.contentSignatures).map {
+      bridge =>
+        new internal.OsciClientImpl[F](
+          TenantId(alias.value), config.subject, bridge, resolver, sink, config.capturePayloads
+        )
+    }
   }
 
   private def defaultTransport(config: OsciConfig): TransportI =

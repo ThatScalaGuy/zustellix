@@ -1,8 +1,8 @@
 package de.thatscalaguy.zustellix.osci.internal
 
-import cats.effect.{Resource, Sync}
+import cats.effect.{Ref, Resource, Sync}
 import cats.syntax.all.*
-import de.thatscalaguy.zustellix.utils.cert.{CertCredential, CertSource}
+import de.thatscalaguy.zustellix.utils.cert.{CertAlias, CertCredential, CertManager, CertSource}
 import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciReceipt}
 
 import de.osci.osci12.common.DialogHandler
@@ -23,19 +23,51 @@ private[osci] object OsciBibBridge {
       contentSignatures: ContentSignaturePolicy
   ): Resource[F, OsciTransport[F]] =
     Resource.eval(originator[F](certSource))
-      .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
+      .map(o => new OsciBibBridgeImpl[F](o.pure[F], transport, contentSignatures))
 
   /** Alias-keyed path: the same PKCS12 the DVDV client uses, supplied by the
    *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes
-   *  (already in the PKCS12 shape — no conversion needed).
+   *  (already in the PKCS12 shape — no conversion needed). The alias is
+   *  resolved eagerly once at acquisition (unknown alias / unopenable
+   *  keystore fail the Resource) and then via [[managedOriginator]] on every
+   *  operation, so rotations in the manager reach OSCI without a rebuild.
    */
   def resource[F[_]: Sync](
-      cred:      CertCredential,
+      certs:     CertManager[F],
+      alias:     CertAlias,
       transport: TransportI,
       contentSignatures: ContentSignaturePolicy
   ): Resource[F, OsciTransport[F]] =
-    Resource.eval(originator[F](cred))
-      .map(new OsciBibBridgeImpl[F](_, transport, contentSignatures))
+    Resource.eval(managedOriginator[F](certs, alias)).flatMap { resolve =>
+      Resource.eval(resolve).as(new OsciBibBridgeImpl[F](resolve, transport, contentSignatures))
+    }
+
+  /** An effect that resolves the alias in the [[de.thatscalaguy.zustellix.utils.cert.CertManager]]
+   *  on every evaluation and yields the tenant's Originator, rebuilding it
+   *  only when the credential actually changed (`DirectoryCertManager` keeps
+   *  the [[CertCredential]] instance stable while the underlying file is
+   *  unchanged, so the common case is a cheap reference check). A failed
+   *  rebuild surfaces as [[OsciError.Certificate]] (or
+   *  `CertManagerError.UnknownCert` for a dropped alias) from that evaluation
+   *  and keeps the previously cached Originator for when the credential
+   *  heals.
+   */
+  def managedOriginator[F[_]: Sync](
+      certs: CertManager[F],
+      alias: CertAlias
+  ): F[F[Originator]] =
+    Ref.of[F, Option[(CertCredential, Originator)]](None).map { cache =>
+      certs.resolve(alias).flatMap { cred =>
+        cache.get.flatMap {
+          case Some((cached, orig)) if sameCredential(cached, cred) => orig.pure[F]
+          case _ => originator[F](cred).flatTap(o => cache.set(Some((cred, o))))
+        }
+      }
+    }
+
+  private def sameCredential(a: CertCredential, b: CertCredential): Boolean =
+    a.password == b.password &&
+      ((a.pkcs12 eq b.pkcs12) || java.util.Arrays.equals(a.pkcs12, b.pkcs12))
 
   /** Our own OSCI role: signer + decrypter from the tenant's PKCS12.
    *  osci-bibliothek's `PKCS12Signer`/`PKCS12Decrypter` consume PKCS12
@@ -89,8 +121,12 @@ private[osci] object OsciBibBridge {
   }
 }
 
+/** `resolveOriginator` is evaluated at the start of every operation, so a
+ *  rotated credential signs/decrypts the next message; pass a pure value for
+ *  a cert that is fixed for the lifetime of the bridge.
+ */
 private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
-    originator: Originator,
+    resolveOriginator: F[Originator],
     transport: TransportI,
     contentSignatures: ContentSignaturePolicy
 ) extends OsciTransport[F] {
@@ -98,86 +134,90 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
   import OsciBibSupport.*
 
   def mediate(route: OsciRoute, subject: String, xml: String): F[OsciRawResult] =
-    Sync[F].blocking {
-      try {
-        val addressee = new Addressee(route.addresseeSig.orNull, route.addresseeCipher)
-        val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
-        val dialog    = new DialogHandler(originator, intermed, transport)
+    resolveOriginator.flatMap { originator =>
+      Sync[F].blocking {
+        try {
+          val addressee = new Addressee(route.addresseeSig.orNull, route.addresseeCipher)
+          val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
+          val dialog    = new DialogHandler(originator, intermed, transport)
 
-        val msgIdResp = new GetMessageId(dialog).send()
-        checkFeedback(msgIdResp.getFeedback)
+          val msgIdResp = new GetMessageId(dialog).send()
+          checkFeedback(msgIdResp.getFeedback)
 
-        val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
-          val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
-          mediate.setMessageId(msgIdResp.getMessageId)
-          mediate.setSubject(subject)
-          mediate.setQualityOfTimeStampCreation(false)
-          mediate.setQualityOfTimeStampReception(false)
+          val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
+            val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
+            mediate.setMessageId(msgIdResp.getMessageId)
+            mediate.setSubject(subject)
+            mediate.setQualityOfTimeStampCreation(false)
+            mediate.setQualityOfTimeStampReception(false)
 
-          mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
+            mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
-          val r = mediate.send()
-          checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
-          r
+            val r = mediate.send()
+            checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
+            r
+          }
+
+          // The synchronous answer comes back encrypted to our cipher cert
+          // (the OSCI roles swap: our Originator becomes the response's
+          // Addressee), so extractVerifiedXml decrypts with our own role and
+          // then checks the author's content signature.
+          val verified = extractVerifiedXml(
+            rsp.getContentContainer,
+            rsp.getEncryptedData,
+            originator,
+            contentSignatures,
+            Option(msgIdResp.getMessageId)
+          )
+
+          OsciRawResult(
+            responseXml = verified.map(_._1),
+            messageId   = msgIdResp.getMessageId,
+            status      = topFeedbackCode(rsp.getFeedback),
+            warnings    = feedbackWarnings(rsp.getFeedback),
+            signature   = verified.map(_._2)
+          )
         }
-
-        // The synchronous answer comes back encrypted to our cipher cert
-        // (the OSCI roles swap: our Originator becomes the response's
-        // Addressee), so extractVerifiedXml decrypts with our own role and
-        // then checks the author's content signature.
-        val verified = extractVerifiedXml(
-          rsp.getContentContainer,
-          rsp.getEncryptedData,
-          originator,
-          contentSignatures,
-          Option(msgIdResp.getMessageId)
-        )
-
-        OsciRawResult(
-          responseXml = verified.map(_._1),
-          messageId   = msgIdResp.getMessageId,
-          status      = topFeedbackCode(rsp.getFeedback),
-          warnings    = feedbackWarnings(rsp.getFeedback),
-          signature   = verified.map(_._2)
-        )
-      }
-      catch {
-        case e: Exception => throw toOsciError(e)
+        catch {
+          case e: Exception => throw toOsciError(e)
+        }
       }
     }
 
   def store(route: OsciRoute, subject: String, xml: String): F[OsciReceipt] =
-    Sync[F].blocking {
-      try {
-        val addressee = new Addressee(route.addresseeSig.orNull, route.addresseeCipher)
-        val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
-        val dialog    = new DialogHandler(originator, intermed, transport)
+    resolveOriginator.flatMap { originator =>
+      Sync[F].blocking {
+        try {
+          val addressee = new Addressee(route.addresseeSig.orNull, route.addresseeCipher)
+          val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
+          val dialog    = new DialogHandler(originator, intermed, transport)
 
-        val msgIdResp = new GetMessageId(dialog).send()
-        checkFeedback(msgIdResp.getFeedback)
+          val msgIdResp = new GetMessageId(dialog).send()
+          checkFeedback(msgIdResp.getFeedback)
 
-        val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
-          val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
-          storeDelivery.setSubject(subject)
-          storeDelivery.setQualityOfTimeStampCreation(false)
-          storeDelivery.setQualityOfTimeStampReception(false)
+          val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
+            val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
+            storeDelivery.setSubject(subject)
+            storeDelivery.setQualityOfTimeStampCreation(false)
+            storeDelivery.setQualityOfTimeStampReception(false)
 
-          storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
+            storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
-          val r = storeDelivery.send()
-          checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
-          r
+            val r = storeDelivery.send()
+            checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
+            r
+          }
+
+          OsciReceipt(
+            messageId = msgIdResp.getMessageId,
+            status    = topFeedbackCode(rsp.getFeedback),
+            creation  = parseTimestamp(rsp.getTimestampCreation),
+            warnings  = feedbackWarnings(rsp.getFeedback)
+          )
         }
-
-        OsciReceipt(
-          messageId = msgIdResp.getMessageId,
-          status    = topFeedbackCode(rsp.getFeedback),
-          creation  = parseTimestamp(rsp.getTimestampCreation),
-          warnings  = feedbackWarnings(rsp.getFeedback)
-        )
-      }
-      catch {
-        case e: Exception => throw toOsciError(e)
+        catch {
+          case e: Exception => throw toOsciError(e)
+        }
       }
     }
 }

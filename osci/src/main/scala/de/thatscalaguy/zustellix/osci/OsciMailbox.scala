@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.osci
 
 import cats.effect.{Async, Resource}
+import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{CertAlias, CertManager, CertSource}
 
 import de.osci.osci12.extinterfaces.TransportI
@@ -45,7 +46,9 @@ object OsciMailbox {
 
   /** Fetches over an [[OsciHttpTransport]] with the config's
    *  `connectTimeout` / `readTimeout`; the `transport` overload swaps it for
-   *  a custom one.
+   *  a custom one. The `certSource` is loaded once and kept for the lifetime
+   *  of the mailbox — use the `CertManager` overload for a cert that can
+   *  rotate.
    */
   def resource[F[_]: Async](
       config:     OsciMailboxConfig,
@@ -63,12 +66,20 @@ object OsciMailbox {
       transport:  TransportI
   ): Resource[F, OsciMailbox[F]] =
     Resource.eval(internal.OsciBibBridge.originator[F](certSource)).map { originator =>
-      new internal.OsciMailboxBridgeImpl[F](originator, config, transport)
+      new internal.OsciMailboxBridgeImpl[F](originator.pure[F], config, transport)
     }
 
   /** Mailbox whose signing + decryption cert is resolved from the shared
    *  [[de.thatscalaguy.zustellix.utils.cert.CertManager]] by alias — the same
    *  cert the matching `DvdvClient` / [[OsciClient]] use.
+   *
+   *  The alias is resolved once at build time to fail fast on a missing cert
+   *  or unopenable keystore, and again on every [[OsciMailbox.pending]] /
+   *  [[OsciMailbox.fetch]] — so a cert rotated in the manager (e.g. a
+   *  hot-reloading `DirectoryCertManager`) is picked up without rebuilding
+   *  the mailbox, and deliveries encrypted to the rotated cipher cert stay
+   *  decryptable. The built OSCI Originator is cached and only rebuilt when
+   *  the credential actually changes.
    */
   def resource[F[_]: Async](
       config: OsciMailboxConfig,
@@ -87,9 +98,9 @@ object OsciMailbox {
       transport: TransportI
   ): Resource[F, OsciMailbox[F]] =
     for {
-      cred       <- Resource.eval(certs.resolve(alias))
-      originator <- Resource.eval(internal.OsciBibBridge.originator[F](cred))
-    } yield new internal.OsciMailboxBridgeImpl[F](originator, config, transport)
+      resolve <- Resource.eval(internal.OsciBibBridge.managedOriginator[F](certs, alias))
+      _       <- Resource.eval(resolve)
+    } yield new internal.OsciMailboxBridgeImpl[F](resolve, config, transport)
 
   private def defaultTransport(config: OsciMailboxConfig): TransportI =
     new OsciHttpTransport(config.connectTimeout, config.readTimeout)
