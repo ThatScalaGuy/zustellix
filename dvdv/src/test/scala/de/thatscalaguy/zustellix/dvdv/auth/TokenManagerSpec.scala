@@ -12,12 +12,17 @@ import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
+import org.typelevel.log4cats.testing.TestingLoggerFactory
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtCirce, JwtOptions}
 
 import java.nio.file.Paths
 import scala.concurrent.duration.*
 
 class TokenManagerSpec extends CatsEffectSuite {
+
+  private given LoggerFactory[IO] = NoOpFactory[IO]
 
   private def resourcePath(name: String) =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)
@@ -35,9 +40,12 @@ class TokenManagerSpec extends CatsEffectSuite {
   private def mkManager(
       client: Client[IO],
       cfg: DvdvConfig = config,
-      resolveCert: IO[LoadedCert] = loaded
-  ): IO[TokenManager[IO]] =
+      resolveCert: IO[LoadedCert] = loaded,
+      lf: LoggerFactory[IO] = NoOpFactory[IO]
+  ): IO[TokenManager[IO]] = {
+    given LoggerFactory[IO] = lf
     TokenManager.make[IO](client, cfg, resolveCert, IO.pure(cfg.tokenUriFor(cfg.baseUri)))
+  }
 
   /** Records every captured POST form so assertions can inspect it. */
   private final case class Recorder(count: Ref[IO, Int], lastForm: Ref[IO, Option[UrlForm]])
@@ -64,6 +72,12 @@ class TokenManagerSpec extends CatsEffectSuite {
     Json.obj(
       "access_token" -> Json.fromString(token),
       "expires_in"   -> Json.fromLong(expiresIn),
+      "token_type"   -> Json.fromString("Bearer")
+    )
+
+  private def accessTokenJsonNoExpiry(token: String): Json =
+    Json.obj(
+      "access_token" -> Json.fromString(token),
       "token_type"   -> Json.fromString("Bearer")
     )
 
@@ -118,6 +132,93 @@ class TokenManagerSpec extends CatsEffectSuite {
       assertEquals(b, "cached")
       assertEquals(n, 1)
     }
+  }
+
+  test("missing expires_in falls back to defaultTokenTtl, not jwtLifetime") {
+    // Under a jwtLifetime fallback, 1s ttl minus the default 30s skew would
+    // force a second POST; the 5-minute defaultTokenTtl keeps the token cached.
+    val cfg = config.copy(jwtLifetime = 1.second)
+    for {
+      rec <- recorder
+      tm  <- mkManager(tokenClient(rec)(_ => Ok(accessTokenJsonNoExpiry("no-expiry"))), cfg)
+      a <- tm.bearer
+      b <- tm.bearer
+      n <- rec.count.get
+    } yield {
+      assertEquals(a, "no-expiry")
+      assertEquals(b, "no-expiry")
+      assertEquals(n, 1)
+    }
+  }
+
+  test("defaultTokenTtl drives the missing-expires_in fallback") {
+    val cfg = config.copy(defaultTokenTtl = 0.seconds)
+    for {
+      rec <- recorder
+      tm  <- mkManager(tokenClient(rec)(n => Ok(accessTokenJsonNoExpiry(s"tok-$n"))), cfg)
+      _ <- tm.bearer
+      _ <- tm.bearer
+      n <- rec.count.get
+    } yield assertEquals(n, 2)
+  }
+
+  test("skew >= ttl: the refresh point is clamped to ttl/2, not refreshed on every call") {
+    val cfg = config.copy(tokenRefreshSkew = 2.hours)
+    for {
+      rec <- recorder
+      tm  <- mkManager(tokenClient(rec)(_ => Ok(accessTokenJson("clamped", 3600))), cfg)
+      a <- tm.bearer
+      b <- tm.bearer
+      n <- rec.count.get
+    } yield {
+      assertEquals(a, "clamped")
+      assertEquals(b, "clamped")
+      assertEquals(n, 1)
+    }
+  }
+
+  test("expires_in = 0 still refreshes on every call") {
+    for {
+      rec <- recorder
+      tm  <- mkManager(tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 0))))
+      _ <- tm.bearer
+      _ <- tm.bearer
+      n <- rec.count.get
+    } yield assertEquals(n, 2)
+  }
+
+  private def warnMessages(lf: TestingLoggerFactory[IO]): IO[Vector[String]] =
+    lf.logged.map(_.collect { case w: TestingLoggerFactory.Warn => w.message })
+
+  test("warns when the token TTL leaves no refresh window (token POST per request)") {
+    for {
+      rec   <- recorder
+      lf    <- TestingLoggerFactory.ref[IO]()
+      tm    <- mkManager(tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 0))), lf = lf)
+      _     <- tm.bearer
+      warns <- warnMessages(lf)
+    } yield assert(warns.exists(_.contains("every request")), warns.mkString("; "))
+  }
+
+  test("warns when tokenRefreshSkew >= token TTL (clamp engaged)") {
+    val cfg = config.copy(tokenRefreshSkew = 2.hours)
+    for {
+      rec   <- recorder
+      lf    <- TestingLoggerFactory.ref[IO]()
+      tm    <- mkManager(tokenClient(rec)(_ => Ok(accessTokenJson("clamped", 3600))), cfg, lf = lf)
+      _     <- tm.bearer
+      warns <- warnMessages(lf)
+    } yield assert(warns.exists(_.contains("clamped")), warns.mkString("; "))
+  }
+
+  test("a healthy ttl/skew combination logs no warnings") {
+    for {
+      rec   <- recorder
+      lf    <- TestingLoggerFactory.ref[IO]()
+      tm    <- mkManager(tokenClient(rec)(_ => Ok(accessTokenJson("fine", 3600))), lf = lf)
+      _     <- tm.bearer
+      warns <- warnMessages(lf)
+    } yield assertEquals(warns, Vector.empty)
   }
 
   test("invalidate forces the next bearer to re-fetch (a second POST)") {

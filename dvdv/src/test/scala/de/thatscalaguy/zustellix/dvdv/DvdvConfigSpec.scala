@@ -3,6 +3,8 @@ package de.thatscalaguy.zustellix.dvdv
 import munit.FunSuite
 import org.http4s.implicits.uri
 
+import scala.concurrent.duration.*
+
 class DvdvConfigSpec extends FunSuite {
 
   test("entryPath defaults to StandaloneAuth and directoryBase is unchanged") {
@@ -19,6 +21,12 @@ class DvdvConfigSpec extends FunSuite {
   test("BundesmasterAuth derives extern/bundesmasterauth/directory/v2") {
     val cfg = DvdvConfig(baseUri = uri"http://x", entryPath = DvdvEntryPath.BundesmasterAuth)
     assertEquals(cfg.directoryBase.renderString, "http://x/extern/bundesmasterauth/directory/v2")
+  }
+
+  test("defaultTokenTtl defaults to 5 minutes, independent of jwtLifetime") {
+    val cfg = DvdvConfig(baseUri = uri"http://x")
+    assertEquals(cfg.defaultTokenTtl, 5.minutes)
+    assertEquals(cfg.copy(jwtLifetime = 1.second).defaultTokenTtl, 5.minutes)
   }
 
   test("tokenUriFor is entry-path-independent") {

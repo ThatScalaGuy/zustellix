@@ -9,6 +9,7 @@ import de.thatscalaguy.zustellix.dvdv.model.*
 import fs2.io.net.Network
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.client.Client
+import org.typelevel.log4cats.LoggerFactory
 
 /** Tagless-final algebra for the DVDV2 v2 directory API. The entry path is
  *  configurable via [[DvdvConfig.entryPath]] (default
@@ -88,8 +89,11 @@ object DvdvClient {
 
   /** Build a fully-wired DvdvClient for a single tenant.
    *  Token + caches are scoped to this resource — each tenant gets its own.
+   *
+   *  All constructors need a `LoggerFactory[F]` in scope for the auth layer's
+   *  warnings — e.g. log4cats' `Slf4jFactory`, or `NoOpFactory` in tests.
    */
-  def resource[F[_]: Async: Network](config: DvdvConfig): Resource[F, DvdvClient[F]] =
+  def resource[F[_]: Async: Network: LoggerFactory](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
       resolve <- Resource.eval(configuredResolve[F](config))
       http    <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
@@ -104,7 +108,7 @@ object DvdvClient {
    *  and again on every token refresh — so a cert rotated in the manager (e.g.
    *  a hot-reloading `DirectoryCertManager`) is picked up without a restart.
    */
-  def resource[F[_]: Async: Network](
+  def resource[F[_]: Async: Network: LoggerFactory](
       config: DvdvConfig,
       certs:  CertManager[F],
       alias:  CertAlias
@@ -118,14 +122,14 @@ object DvdvClient {
   /** Build a DvdvClient over a caller-provided http4s Client.
    *  Useful for testing or when the caller wants to control the HTTP backend.
    */
-  def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
+  def fromClient[F[_]: Async: LoggerFactory](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
     Resource.eval(configuredResolve[F](config)).flatMap(resolve => assemble[F](config, http, resolve))
 
   /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. Like the
    *  [[resource]] overload, the cert is re-resolved on every token refresh so
    *  rotations in the [[CertManager]] take effect without a rebuild.
    */
-  def fromClient[F[_]: Async](
+  def fromClient[F[_]: Async: LoggerFactory](
       config: DvdvConfig,
       http:   Client[F],
       certs:  CertManager[F],
@@ -157,7 +161,7 @@ object DvdvClient {
         )
     }
 
-  private def assemble[F[_]: Async](
+  private def assemble[F[_]: Async: LoggerFactory](
       config:  DvdvConfig,
       http:    Client[F],
       resolve: F[LoadedCert]

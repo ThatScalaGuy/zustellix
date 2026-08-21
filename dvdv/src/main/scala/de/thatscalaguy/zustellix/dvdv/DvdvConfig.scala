@@ -39,7 +39,17 @@ final case class DvdvConfig(
      */
     jwtAudience: Option[String] = None,
     jwtLifetime: FiniteDuration = 60.seconds,
+    /** How far ahead of token expiry a refresh is triggered. The refresh point
+     *  is clamped to at least half the token TTL, so a skew >= TTL cannot
+     *  force a token POST on every request.
+     */
     tokenRefreshSkew: FiniteDuration = 30.seconds,
+    /** Token lifetime assumed when the token response carries no `expires_in`.
+     *  Real DVDV tokens are typically day-valid, but a token without a stated
+     *  lifetime is deliberately trusted only briefly — an expired guess
+     *  self-heals cheaply via the 401 → invalidate → retry path.
+     */
+    defaultTokenTtl: FiniteDuration = 5.minutes,
     requestTimeout: FiniteDuration = 30.seconds,
     ignoreRevocation: Boolean = false,
     failoverServers: List[Uri] = Nil,

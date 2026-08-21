@@ -18,11 +18,15 @@ import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
 import org.typelevel.ci.CIString
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
 import pdi.jwt.{JwtCirce, JwtOptions}
 
 import java.nio.file.Paths
 
 class DvdvClientSpec extends CatsEffectSuite {
+
+  private given LoggerFactory[IO] = NoOpFactory[IO]
 
   private def resourcePath(name: String) =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)

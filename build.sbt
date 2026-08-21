@@ -71,9 +71,11 @@ lazy val dvdv = (project in file("dvdv"))
       "io.circe" %% "circe-parser" % CirceV,
       "io.chrisdavenport" %% "mules" % MulesV,
       "com.github.jwt-scala" %% "jwt-circe" % JwtScalaV,
+      "org.typelevel" %% "log4cats-core" % Log4catsV,
       "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
       "org.http4s" %% "http4s-ember-server" % Http4sV % Test,
-      "org.typelevel" %% "log4cats-noop" % Log4catsV % Test
+      "org.typelevel" %% "log4cats-noop" % Log4catsV % Test,
+      "org.typelevel" %% "log4cats-testing" % Log4catsV % Test
     ),
     Test / fork := true
   )

@@ -258,10 +258,11 @@ atomically — write to a temp file in the same directory, then
 otherwise be served from the retained previous credential until the write
 completes.
 
-`zustellix-utils` depends only on `log4cats-core`, so to use `Slf4jFactory`
-as shown above, add `org.typelevel::log4cats-slf4j` plus an SLF4J backend
-(e.g. `logback-classic`) to your own build — or provide any other
-`LoggerFactory[F]` implementation.
+`zustellix-utils` and `zustellix-dvdv` depend only on `log4cats-core`, so to
+use `Slf4jFactory` as shown above, add `org.typelevel::log4cats-slf4j` plus
+an SLF4J backend (e.g. `logback-classic`) to your own build — or provide any
+other `LoggerFactory[F]` implementation. The `DvdvClient` constructors need
+the same `LoggerFactory[F]` in scope.
 
 ---
 
@@ -275,10 +276,14 @@ import de.thatscalaguy.zustellix.dvdv.*
 import de.thatscalaguy.zustellix.dvdv.model.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.slf4j.Slf4jFactory
 
 import java.nio.file.Paths
 
 object Demo extends IOApp.Simple:
+
+  given LoggerFactory[IO] = Slf4jFactory.create[IO]
 
   val config = DvdvConfig(
     baseUri    = uri"https://your-dvdv-betreiber.example",
@@ -319,6 +324,11 @@ DvdvClient.fromClient[IO](config, myClient)
 DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
 
+All constructors require a `given LoggerFactory[F]` in scope (the auth layer
+warns on degenerate token TTL/skew combinations) — see the
+[log4cats note](#many-certificates-by-alias-certmanager) at the end of the
+`utils` section for how to supply one.
+
 On the `CertManager` overloads the alias is resolved once at build time (so an
 unknown alias fails fast) and then again on every token refresh — a cert
 rotated in the manager (e.g. by `DirectoryCertManager`) signs the next
@@ -343,7 +353,8 @@ val config = DvdvConfig(
   tokenEndpoint    = None,            // explicit token POST target; defaults to <active server>/extern/standaloneauth/token
   jwtAudience      = None,            // JWT aud claim; defaults to the token endpoint actually contacted (follows failover)
   jwtLifetime      = 60.seconds,      // client_assertion lifetime
-  tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry
+  tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry (clamped to at most half the token TTL)
+  defaultTokenTtl  = 5.minutes,       // token lifetime assumed when the token response has no expires_in
   requestTimeout   = 30.seconds,
 
   cacheConfig = CacheConfig(
@@ -526,9 +537,13 @@ import de.thatscalaguy.zustellix.dvdv.*
 import de.thatscalaguy.zustellix.osci.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.slf4j.Slf4jFactory
 import java.nio.file.Paths
 
 object SendDemo extends IOApp.Simple:
+
+  given LoggerFactory[IO] = Slf4jFactory.create[IO]
 
   val cert = CertSource.Pkcs12(Paths.get("/secrets/flensburg.p12"), sys.env("P12_PW"))
 
@@ -792,6 +807,8 @@ alias as the tenant id:
 
 ```scala
 val alias = CertAlias("flensburg")
+
+// given LoggerFactory[IO] in scope, as in the single-tenant example
 
 (for
   dvdv <- DvdvClient.resource[IO](dvdvConfig, certManager, alias)

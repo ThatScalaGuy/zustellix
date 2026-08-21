@@ -79,7 +79,7 @@ object CachedDvdvClient {
     purgeLoop(purgeInterval, caches.purgeAll).background.as(new Impl[F](underlying, caches))
 
   // A failed purge pass never kills the loop; the error is dropped because
-  // no logger is available in this module.
+  // no logger is threaded into the cache layer.
   private def purgeLoop[F[_]: Async](interval: FiniteDuration, purgeAll: F[Unit]): F[Unit] =
     (Async[F].sleep(interval) *> purgeAll.attempt.void).foreverM
 
