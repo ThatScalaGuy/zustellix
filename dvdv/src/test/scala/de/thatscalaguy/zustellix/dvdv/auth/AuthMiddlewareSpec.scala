@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.{IO, Ref}
+import cats.effect.kernel.Resource
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.client.Client
@@ -135,5 +136,80 @@ class AuthMiddlewareSpec extends CatsEffectSuite {
       assertEquals(ss, List("tok-A"))  // the middleware invalidated the token it sent
       assertEquals(fin, "tok-B")       // the concurrently rotated token survived
     }
+  }
+
+  /** Hand-rolled backend whose Nth response is a tracked resource: acquisition
+   *  and release are logged as `acquire-N` / `release-N`, so tests can pin
+   *  release ordering and acquire/release balance.
+   */
+  private def trackingBackend(events: Ref[IO, List[String]], respFor: Int => Response[IO]): Client[IO] = {
+    val counter = Ref.unsafe[IO, Int](0)
+    Client[IO] { _ =>
+      Resource
+        .make(counter.updateAndGet(_ + 1).flatTap(n => events.update(_ :+ s"acquire-$n")))(n =>
+          events.update(_ :+ s"release-$n")
+        )
+        .map(respFor)
+    }
+  }
+
+  test("401 then 200: the 401 response is released before the retry is sent") {
+    val events  = Ref.unsafe[IO, List[String]](Nil)
+    val backend = trackingBackend(events, n => Response[IO](if (n == 1) Status.Unauthorized else Status.Ok))
+
+    for {
+      inv    <- Ref.of[IO, Int](0)
+      stale  <- Ref.of[IO, List[String]](Nil)
+      tm      = new StubTokenManager(inv, stale, _ => "tok-A")
+      c       = AuthMiddleware(tm)(backend)
+      inUse  <- c.run(Request[IO](Method.GET, uri"http://dvdv.test/x"))
+                  .use(resp => events.get.map(evs => (resp.status, evs)))
+      after  <- events.get
+    } yield {
+      val (st, during) = inUse
+      assertEquals(st, Status.Ok)
+      // the 401's slot is freed before the retry is acquired
+      assertEquals(during, List("acquire-1", "release-1", "acquire-2"))
+      assertEquals(after, List("acquire-1", "release-1", "acquire-2", "release-2"))
+    }
+  }
+
+  test("cancelling the caller mid-use releases the response exactly once") {
+    val events  = Ref.unsafe[IO, List[String]](Nil)
+    val backend = trackingBackend(events, _ => Response[IO](Status.Ok))
+
+    for {
+      inv     <- Ref.of[IO, Int](0)
+      stale   <- Ref.of[IO, List[String]](Nil)
+      tm       = new StubTokenManager(inv, stale, _ => "tok-A")
+      c        = AuthMiddleware(tm)(backend)
+      gate    <- IO.deferred[Unit]
+      started <- IO.deferred[Unit]
+      fib     <- c.run(Request[IO](Method.GET, uri"http://dvdv.test/x"))
+                   .use(_ => started.complete(()) *> gate.get)
+                   .start
+      _       <- started.get
+      _       <- fib.cancel
+      evs     <- events.get
+    } yield {
+      assertEquals(evs.count(_.startsWith("acquire")), 1)
+      assertEquals(evs.count(_.startsWith("release")), 1)
+    }
+  }
+
+  test("cancellation at any point never leaks the response") {
+    val events  = Ref.unsafe[IO, List[String]](Nil)
+    val backend = trackingBackend(events, _ => Response[IO](Status.Ok))
+    val request = Request[IO](Method.GET, uri"http://dvdv.test/x")
+
+    for {
+      inv   <- Ref.of[IO, Int](0)
+      stale <- Ref.of[IO, List[String]](Nil)
+      tm     = new StubTokenManager(inv, stale, _ => "tok-A")
+      c      = AuthMiddleware(tm)(backend)
+      // race an immediate winner so cancellation lands at varying points
+      _     <- c.status(request).race(IO.cede).void.replicateA_(150)
+      evs   <- events.get
+    } yield assertEquals(evs.count(_.startsWith("acquire")), evs.count(_.startsWith("release")))
   }
 }

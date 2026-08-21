@@ -267,4 +267,87 @@ class FailoverClientSpec extends CatsEffectSuite {
       assertEquals(hs, List("primary", "secondary"))
     }
   }
+
+  /** Hand-rolled backend whose responses are tracked resources: acquisition and
+   *  release are logged per host as `acquire-<host>` / `release-<host>`, so
+   *  tests can pin release ordering and acquire/release balance across
+   *  failover attempts. A raising `behavior` acquires (and logs) nothing.
+   */
+  private def tracking(events: Ref[IO, List[String]])(behavior: String => IO[Response[IO]]): Client[IO] =
+    Client[IO] { r =>
+      val host = hostOf(r)
+      Resource.make(behavior(host).flatTap(_ => events.update(_ :+ s"acquire-$host")))(_ =>
+        events.update(_ :+ s"release-$host")
+      )
+    }
+
+  test("failover releases the primary's 5xx response before contacting the secondary") {
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = tracking(events) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c     <- make(NonEmptyList(primary, List(secondary)))(backend)
+      inUse <- c.run(req).use(resp => events.get.map(evs => (resp.status, evs)))
+      after <- events.get
+    } yield {
+      val (st, during) = inUse
+      assertEquals(st, Status.Ok)
+      // the primary's slot is freed before the secondary is contacted
+      assertEquals(during, List("acquire-primary", "release-primary", "acquire-secondary"))
+      assertEquals(after, List("acquire-primary", "release-primary", "acquire-secondary", "release-secondary"))
+    }
+  }
+
+  test("cancelling the caller mid-use releases the final response exactly once") {
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = tracking(events) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c       <- make(NonEmptyList(primary, List(secondary)))(backend)
+      gate    <- IO.deferred[Unit]
+      started <- IO.deferred[Unit]
+      fib     <- c.run(req).use(_ => started.complete(()) *> gate.get).start
+      _       <- started.get
+      _       <- fib.cancel
+      evs     <- events.get
+    } yield {
+      assertEquals(evs.count(_.startsWith("acquire")), 2)
+      assertEquals(evs.count(_.startsWith("release")), 2)
+      assertEquals(evs.count(_ == "release-secondary"), 1)
+    }
+  }
+
+  test("cancellation at any point never leaks a response") {
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = tracking(events) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)))(backend)
+      // race an immediate winner so cancellation lands at varying points
+      _   <- c.status(req).race(IO.cede).void.replicateA_(150)
+      evs <- events.get
+    } yield assertEquals(evs.count(_.startsWith("acquire")), evs.count(_.startsWith("release")))
+  }
+
+  test("transport error on primary leaks nothing") {
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = tracking(events) {
+      case "primary" => IO.raiseError(new ConnectException("refused"))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)))(backend)
+      st  <- c.status(req)
+      evs <- events.get
+    } yield {
+      assertEquals(st, Status.Ok)
+      assertEquals(evs, List("acquire-secondary", "release-secondary"))
+    }
+  }
 }

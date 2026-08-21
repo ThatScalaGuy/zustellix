@@ -3,6 +3,7 @@ package de.thatscalaguy.zustellix.dvdv.internal
 import cats.data.NonEmptyList
 import cats.effect.{Async, Clock, Ref}
 import cats.effect.kernel.Resource
+import cats.effect.std.NonEmptyHotswap
 import cats.syntax.all.*
 import org.http4s.{Response, Uri}
 import org.http4s.client.Client
@@ -83,44 +84,58 @@ object FailoverClient {
         .maxByOption(_.segments.size)
         .getOrElse(Uri.Path.empty)
 
-      Resource.suspend {
-        Clock[F].realTime.flatMap { now =>
-          // Decide once per request whether recovery is due, advancing the
-          // recover deadline as a side effect (matches shallAttemptRecover).
-          state.modify { s =>
-            val due = s.activeIndex != 0 && s.nextRecoverAt.forall(now >= _)
-            val next = if (due) s.copy(nextRecoverAt = Some(now + recoverAfter)) else s
-            (next, (due, s.activeIndex))
-          }.flatMap { case (attemptRecover, activeIndex) =>
-            // Try the candidate at loop position `i`; recurse to the next on a
-            // 5xx or transport failure. The last attempt's outcome is final.
-            def go(i: Int): F[Resource[F, Response[F]]] = {
-              val serverIndex = pickServerIndex(i, activeIndex, attemptRecover)
-              val srv         = serverList(serverIndex)
-              val routed      = req.withUri(rebase(req.uri, sourceBase, srv))
-              val isLast      = i == noOfServers - 1
+      // The in-flight attempt's response lives in a hotswap whose finalizer is
+      // part of the caller's resource scope, so cancellation cannot leak it.
+      NonEmptyHotswap.empty[F, Either[Throwable, Response[F]]].flatMap { hotswap =>
+        Resource.eval {
+          Clock[F].realTime.flatMap { now =>
+            // Decide once per request whether recovery is due, advancing the
+            // recover deadline as a side effect (matches shallAttemptRecover).
+            state.modify { s =>
+              val due = s.activeIndex != 0 && s.nextRecoverAt.forall(now >= _)
+              val next = if (due) s.copy(nextRecoverAt = Some(now + recoverAfter)) else s
+              (next, (due, s.activeIndex))
+            }.flatMap { case (attemptRecover, activeIndex) =>
+              // Try the candidate at loop position `i`; recurse to the next on a
+              // 5xx or transport failure. The last attempt's outcome is final.
+              def go(i: Int): F[Response[F]] = {
+                val serverIndex = pickServerIndex(i, activeIndex, attemptRecover)
+                val srv         = serverList(serverIndex)
+                val routed      = req.withUri(rebase(req.uri, sourceBase, srv))
+                val isLast      = i == noOfServers - 1
 
-              underlying.run(routed).allocated.attempt.flatMap {
-                case Right((resp, release)) if resp.status.code >= 500 =>
-                  if (isLast)
-                    markFailedOver(state, serverIndex, now + recoverAfter)
-                      .as(Resource.make(Async[F].pure(resp))(_ => release))
-                  else release *> go(i + 1)
-                case Right((resp, release)) =>
-                  markAnswered(state, serverIndex, now + recoverAfter)
-                    .as(Resource.make(Async[F].pure(resp))(_ => release))
-                case Left(err) =>
-                  if (isLast) markFailedOver(state, serverIndex, now + recoverAfter) *> Async[F].raiseError(err)
-                  else go(i + 1)
+                // Release the prior attempt's response before allocating the
+                // next, or a small connection pool can deadlock.
+                hotswap.clear *> swapIn(hotswap, underlying.run(routed).attempt).flatMap {
+                  case Right(resp) if resp.status.code >= 500 =>
+                    if (isLast) markFailedOver(state, serverIndex, now + recoverAfter).as(resp)
+                    else go(i + 1)
+                  case Right(resp) =>
+                    markAnswered(state, serverIndex, now + recoverAfter).as(resp)
+                  case Left(err) =>
+                    if (isLast) markFailedOver(state, serverIndex, now + recoverAfter) *> Async[F].raiseError(err)
+                    else go(i + 1)
+                }
               }
-            }
 
-            go(0)
+              go(0)
+            }
           }
         }
       }
     }
   }
+
+  /** Swaps `next` into the hotswap and hands back the value it acquired. The
+   *  previous entry is only released after `next` is acquired, so callers
+   *  `clear` first where the old slot must be freed before the next attempt.
+   */
+  private def swapIn[F[_]: Async, A](
+      hotswap: NonEmptyHotswap[F, Option[A]],
+      next: Resource[F, A]
+  ): F[A] =
+    hotswap.swap(next.map(_.some)) *>
+      hotswap.getOpt.use(_.liftTo[F](new IllegalStateException("hotswap empty after swap")))
 
   /** Re-address `reqUri` at the `target` server: swap in the target's scheme
    *  and authority, strip the base path the request was addressed under
