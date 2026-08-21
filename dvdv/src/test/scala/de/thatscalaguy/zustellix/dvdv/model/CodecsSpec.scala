@@ -35,6 +35,42 @@ class CodecsSpec extends FunSuite {
     assertEquals(decode[ServiceElementType](""""OSCI_ADDRESSEE""""), Right(ServiceElementType.OSCI_ADDRESSEE))
   }
 
+  test("ServiceElementType decodes unknown constants to Other") {
+    assertEquals(decode[ServiceElementType](""""SOME_FUTURE_TYPE""""), Right(ServiceElementType.Other("SOME_FUTURE_TYPE")))
+  }
+
+  test("ParameterType decodes unknown constants to Other") {
+    assertEquals(decode[ParameterType](""""SOME_FUTURE_TYPE""""), Right(ParameterType.Other("SOME_FUTURE_TYPE")))
+  }
+
+  test("ServiceSpecificationType decodes unknown constants to Other") {
+    assertEquals(decode[ServiceSpecificationType](""""SOME_FUTURE_TYPE""""), Right(ServiceSpecificationType.Other("SOME_FUTURE_TYPE")))
+  }
+
+  test("RevocationReason decodes unknown constants to Other") {
+    assertEquals(decode[RevocationReason](""""SOME_FUTURE_REASON""""), Right(RevocationReason.Other("SOME_FUTURE_REASON")))
+  }
+
+  test("enum encoders render Other as the raw wire string and known cases as their name") {
+    assertEquals((RevocationReason.Other("SOME_FUTURE_REASON"): RevocationReason).asJson.noSpaces, """"SOME_FUTURE_REASON"""")
+    assertEquals((RevocationReason.KEY_COMPROMISE: RevocationReason).asJson.noSpaces, """"KEY_COMPROMISE"""")
+  }
+
+  test("Certificate decodes with an unknown revocationReason") {
+    val js = """
+      {
+        "fingerprint": "deadbeef",
+        "revocationDate": "2026-01-01T00:00:00Z",
+        "revocationReason": "SOME_FUTURE_REASON"
+      }
+    """
+    val parsed = decode[Certificate](js)
+    assert(parsed.isRight, s"failed: $parsed")
+    val cert = parsed.toOption.get
+    assertEquals(cert.revocationDate, Some("2026-01-01T00:00:00Z"))
+    assertEquals(cert.revocationReason, Some(RevocationReason.Other("SOME_FUTURE_REASON")))
+  }
+
   test("Request encodes only set fields and decodes back") {
     val r = Request(fingerPrint = Some("abc"), category = Some("Meldebehörde"))
     val js = r.asJson
