@@ -258,10 +258,9 @@ class OsciBibSupportSpec extends FunSuite {
   }
 
   test("extractVerifiedXml verifies the signature of a decrypted container") {
-    // Decrypting a self-built EncryptedDataOSCI needs a wire roundtrip (the
-    // encrypted keys only land in the EncryptedData on serialization), so
     // decrypt is stubbed to return the signed container — what matters here
-    // is that the encrypted branch runs the same verification.
+    // is that the encrypted branch runs the same verification. The real
+    // decrypt of a serialized entry is covered by the roundtrip test below.
     val signed = new ContentContainer()
     signed.addContent(new Content("<xml>e2e</xml>"))
     signed.sign(signingRole)
@@ -270,6 +269,41 @@ class OsciBibSupportSpec extends FunSuite {
     }
     val out = extractVerifiedXml(
       null, Array[EncryptedDataOSCI](enc), signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  /** Serialize an encrypted entry and SAX-reparse it through the library's
+   *  public `EncryptedDataBuilder` — the shape a received message's entries
+   *  arrive in (the encrypted keys only land in the `EncryptedData` on
+   *  serialization). `writeXML(out, false)` emits the namespace declarations
+   *  the SOAP envelope would otherwise supply; the parse-side constructor
+   *  resolves the `EncryptedKey`'s RetrievalMethod ref-id against the
+   *  carrier message's roles, so `decryptWith` is registered there.
+   */
+  private def reparse(enc: EncryptedDataOSCI, decryptWith: Originator): EncryptedDataOSCI = {
+    val out = new java.io.ByteArrayOutputStream()
+    enc.writeXML(out, false)
+    val encData =
+      de.osci.osci12.encryption.EncryptedDataBuilder.createFromXmlBytes(out.toByteArray)
+    val msg = new de.osci.osci12.messagetypes.OSCIMessage() {}
+    msg.addRole(decryptWith)
+    new EncryptedDataOSCI(encData, msg)
+  }
+
+  test("extractVerifiedXml decrypts a real EncryptedDataOSCI encrypted for test-cert.p12") {
+    // The full cycle the mailbox performs on a fetched delivery: the sender
+    // signs and encrypts, the entry crosses the wire serialized, and the
+    // receiver decrypts with its own role and verifies the author's content
+    // signature on the decrypted container.
+    val container = new ContentContainer()
+    container.addContent(new Content("<xml>e2e</xml>"))
+    container.sign(signingRole)
+    val enc = new EncryptedDataOSCI(container)
+    enc.encrypt(signingRole)
+    val parsed = reparse(enc, signingRole)
+    val out = extractVerifiedXml(
+      null, Array[EncryptedDataOSCI](parsed), signingRole, ContentSignaturePolicy.Require, None
     )
     assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
   }

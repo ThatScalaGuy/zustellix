@@ -69,6 +69,24 @@ class ConfigSourceSpec extends CatsEffectSuite {
     }
   }
 
+  test("file defaults serviceUri and subject when absent") {
+    val props =
+      """tenant.alice.cert.type     = pkcs12
+        |tenant.alice.cert.path     = /keys/alice.p12
+        |tenant.alice.cert.password = pw
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.map { m =>
+      val c = m(TenantId("alice"))
+      assertEquals(c.serviceUri, OsciConfig.DefaultXMeldServiceUri)
+      assertEquals(c.subject, OsciConfig.DefaultSubject)
+    }
+  }
+
   test("file parses optional timeouts and defaults them when absent") {
     val props =
       """tenant.alice.cert.type        = pkcs12
