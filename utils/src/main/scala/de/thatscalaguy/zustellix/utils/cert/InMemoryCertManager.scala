@@ -36,7 +36,9 @@ object InMemoryCertManager {
       }
 
     def loadedCert(alias: CertAlias): F[LoadedCert] =
-      resolve(alias).flatMap(_.loadedCert[F])
+      resolve(alias).flatMap(
+        _.loadedCert[F].adaptError { case e => CertManagerError.LoadFailed(alias, e) }
+      )
 
     def knownAliases: F[Set[CertAlias]] = ref.get.map(_.keySet)
 

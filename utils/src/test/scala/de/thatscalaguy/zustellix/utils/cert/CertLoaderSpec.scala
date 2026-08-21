@@ -34,7 +34,24 @@ class CertLoaderSpec extends CatsEffectSuite {
     for {
       p12 <- CertLoader.load[IO](CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"))
       pem <- CertLoader.load[IO](CertSource.Pem(resourcePath("test-cert.pem"), resourcePath("test-key.pem"), None))
-    } yield assertEquals(pem.fingerprintSha1Hex, p12.fingerprintSha1Hex)
+    } yield {
+      assertEquals(pem.fingerprintSha1Hex, p12.fingerprintSha1Hex)
+      assertEquals(pem.fingerprintSha256Hex, p12.fingerprintSha256Hex)
+    }
+  }
+
+  test("SHA-256 fingerprint is 64 lowercase hex chars matching an independently computed digest") {
+    CertLoader.load[IO](CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")).map { loaded =>
+      val expected = java.security.MessageDigest
+        .getInstance("SHA-256")
+        .digest(loaded.certificate.getEncoded)
+        .map(b => f"$b%02x")
+        .mkString
+      assertEquals(loaded.fingerprintSha256Hex, expected)
+      assert(loaded.fingerprintSha256Hex.length == 64)
+      assert(loaded.fingerprintSha256Hex.matches("^[0-9a-f]+$"))
+      assert(loaded.fingerprintSha256Hex != loaded.fingerprintSha1Hex)
+    }
   }
 
   test("loadPkcs12Bytes yields the same fingerprint as the path-based load") {

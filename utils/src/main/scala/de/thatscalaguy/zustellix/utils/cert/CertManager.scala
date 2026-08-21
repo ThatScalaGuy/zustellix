@@ -2,6 +2,8 @@ package de.thatscalaguy.zustellix.utils.cert
 
 import cats.effect.Sync
 
+import scala.util.control.NoStackTrace
+
 /** The certificate material shared by DVDV and OSCI/XMeld for one tenant.
  *
  *  Raw PKCS12 bytes + password is the lowest common denominator: OSCI's
@@ -19,11 +21,16 @@ final case class CertCredential(pkcs12: Array[Byte], password: String) {
   override def toString: String = s"CertCredential(${pkcs12.length} bytes, <redacted>)"
 }
 
-sealed abstract class CertManagerError(msg: String) extends RuntimeException(msg)
+sealed abstract class CertManagerError(msg: String, cause: Option[Throwable] = None)
+    extends RuntimeException(msg, cause.orNull)
+    with NoStackTrace
 
 object CertManagerError {
   final case class UnknownCert(alias: CertAlias)
       extends CertManagerError(s"No certificate for alias ${alias.value}")
+
+  final case class LoadFailed(alias: CertAlias, cause: Throwable)
+      extends CertManagerError(s"Failed to load certificate for alias ${alias.value}", Some(cause))
 }
 
 /** Resolves a certificate by its [[CertAlias]]. Implementations:
@@ -34,7 +41,12 @@ trait CertManager[F[_]] {
   /** Raises [[CertManagerError.UnknownCert]] in `F` if the alias is not known. */
   def resolve(alias: CertAlias): F[CertCredential]
 
-  /** `resolve` + derive the DVDV [[LoadedCert]] (private key / X509). */
+  /** `resolve` + derive the DVDV [[LoadedCert]] (private key / X509).
+   *
+   *  Raises [[CertManagerError.UnknownCert]] for an unknown alias and
+   *  [[CertManagerError.LoadFailed]] when the credential's PKCS12 fails to
+   *  parse.
+   */
   def loadedCert(alias: CertAlias): F[LoadedCert]
 
   def knownAliases: F[Set[CertAlias]]
