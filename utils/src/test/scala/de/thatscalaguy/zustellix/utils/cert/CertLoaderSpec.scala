@@ -7,6 +7,8 @@ import java.io.{ByteArrayOutputStream, StringWriter}
 import java.math.BigInteger
 import java.nio.file.{Files, Paths}
 import java.security.cert.X509Certificate
+import java.security.interfaces.RSAPrivateKey
+import java.security.spec.ECGenParameterSpec
 import java.security.{KeyPair, KeyPairGenerator, KeyStore}
 import java.util.Date
 import javax.crypto.spec.SecretKeySpec
@@ -98,11 +100,18 @@ class CertLoaderSpec extends CatsEffectSuite {
     kpg.generateKeyPair()
   }
 
+  private def ecKeyPair(): KeyPair = {
+    val kpg = KeyPairGenerator.getInstance("EC", "BC")
+    kpg.initialize(new ECGenParameterSpec("secp256r1"))
+    kpg.generateKeyPair()
+  }
+
   private def mintCert(
       subject: String,
       subjectKey: KeyPair,
       issuer: String,
-      issuerKey: KeyPair
+      issuerKey: KeyPair,
+      sigAlg: String = "SHA256withRSA"
   ): X509Certificate = {
     val now   = new Date()
     val later = new Date(now.getTime + 86400000L)
@@ -115,7 +124,7 @@ class CertLoaderSpec extends CatsEffectSuite {
       subjectKey.getPublic
     )
     val signer =
-      new org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA").build(issuerKey.getPrivate)
+      new org.bouncycastle.operator.jcajce.JcaContentSignerBuilder(sigAlg).build(issuerKey.getPrivate)
     new org.bouncycastle.cert.jcajce.JcaX509CertificateConverter().getCertificate(builder.build(signer))
   }
 
@@ -145,6 +154,14 @@ class CertLoaderSpec extends CatsEffectSuite {
     val sw     = new StringWriter()
     val writer = new org.bouncycastle.openssl.jcajce.JcaPEMWriter(sw)
     try objects.foreach(writer.writeObject)
+    finally writer.close()
+    sw.toString
+  }
+
+  private def pemBlock(headerType: String, der: Array[Byte]): String = {
+    val sw     = new StringWriter()
+    val writer = new org.bouncycastle.util.io.pem.PemWriter(sw)
+    try writer.writeObject(new org.bouncycastle.util.io.pem.PemObject(headerType, der))
     finally writer.close()
     sw.toString
   }
@@ -186,6 +203,60 @@ class CertLoaderSpec extends CatsEffectSuite {
       assertEquals(p12.chain, List(p12.certificate))
       assertEquals(pem.chain, List(pem.certificate))
     }
+  }
+
+  // --- PEM key inputs whose first block is not the key ---
+
+  test("PEM key preceded by an EC PARAMETERS block loads (openssl ecparam -genkey layout)") {
+    for {
+      key     <- IO.blocking(ecKeyPair())
+      certPem <- IO.blocking(toPem(mintCert("ec-named", key, "ec-named", key, sigAlg = "SHA256withECDSA")))
+      keyPem  <- IO.blocking {
+                   val params = pemBlock(
+                     "EC PARAMETERS",
+                     new org.bouncycastle.asn1.ASN1ObjectIdentifier("1.2.840.10045.3.1.7").getEncoded
+                   )
+                   params + toPem(key.getPrivate)
+                 }
+      loaded  <- CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+    } yield assert(Set("EC", "ECDSA").contains(loaded.privateKey.getAlgorithm), clues(loaded.privateKey.getAlgorithm))
+  }
+
+  test("PEM key preceded by explicit EC PARAMETERS loads") {
+    for {
+      key     <- IO.blocking(ecKeyPair())
+      certPem <- IO.blocking(toPem(mintCert("ec-explicit", key, "ec-explicit", key, sigAlg = "SHA256withECDSA")))
+      keyPem  <- IO.blocking {
+                   val params = pemBlock(
+                     "EC PARAMETERS",
+                     org.bouncycastle.asn1.x9.ECNamedCurveTable.getByName("prime256v1").getEncoded
+                   )
+                   params + toPem(key.getPrivate)
+                 }
+      loaded  <- CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+    } yield assert(Set("EC", "ECDSA").contains(loaded.privateKey.getAlgorithm), clues(loaded.privateKey.getAlgorithm))
+  }
+
+  test("PEM bundle with the certificate before the key loads the key") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert))
+      keyPem   <- IO.blocking(toPem(material.leafCert, material.leafKey.getPrivate))
+      loaded   <- CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+    } yield assertEquals(
+      loaded.privateKey.asInstanceOf[RSAPrivateKey].getModulus,
+      material.leafKey.getPrivate.asInstanceOf[RSAPrivateKey].getModulus
+    )
+  }
+
+  test("PEM key input containing no key fails with a clear message") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert))
+      err <- interceptIO[IllegalArgumentException](
+               CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), certPem.getBytes("UTF-8"), None))
+             )
+    } yield assert(err.getMessage.contains("No private key found"), clues(err.getMessage))
   }
 
   // --- Alias selection on multi-entry / non-private-key keystores ---

@@ -3,6 +3,7 @@ package de.thatscalaguy.zustellix.utils.cert
 import cats.effect.Sync
 
 import java.io.{ByteArrayInputStream, InputStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.cert.{CertificateFactory, X509Certificate}
 import java.security.{KeyStore, MessageDigest, PrivateKey}
@@ -124,13 +125,21 @@ object CertLoader {
     import org.bouncycastle.openssl.jcajce.{JcaPEMKeyConverter, JcePEMDecryptorProviderBuilder, JceOpenSSLPKCS8DecryptorProviderBuilder}
     import org.bouncycastle.pkcs.{PKCS8EncryptedPrivateKeyInfo}
     import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
+    import org.bouncycastle.asn1.ASN1ObjectIdentifier
+    import org.bouncycastle.asn1.x9.X9ECParameters
+    import org.bouncycastle.cert.X509CertificateHolder
 
-    val reader = new java.io.InputStreamReader(new ByteArrayInputStream(keyBytes))
+    val reader = new java.io.InputStreamReader(new ByteArrayInputStream(keyBytes), StandardCharsets.UTF_8)
     val parser = new PEMParser(reader)
     try {
-      val obj      = parser.readObject()
       val converter = new JcaPEMKeyConverter().setProvider(bcProvider)
-      obj match {
+      // Non-key blocks before the key are skipped: `openssl ecparam -genkey`
+      // emits an EC PARAMETERS block ahead of the key, and combined PEM bundles
+      // may place certificates first.
+      @annotation.tailrec
+      def nextKey(): PrivateKey = parser.readObject() match {
+        case null =>
+          throw new IllegalArgumentException(s"No private key found in PEM input at $keyLabel")
         case kp: PEMKeyPair =>
           converter.getKeyPair(kp).getPrivate
         case enc: PEMEncryptedKeyPair =>
@@ -147,11 +156,14 @@ object CertLoader {
           converter.getPrivateKey(enc.decryptPrivateKeyInfo(decryptor))
         case info: PrivateKeyInfo =>
           converter.getPrivateKey(info)
+        case _: ASN1ObjectIdentifier | _: X9ECParameters | _: X509CertificateHolder =>
+          nextKey()
         case other =>
           throw new IllegalArgumentException(
-            s"Unsupported PEM object at $keyLabel: ${Option(other).map(_.getClass.getName).getOrElse("null")}"
+            s"Unsupported PEM object at $keyLabel: ${other.getClass.getName}"
           )
       }
+      nextKey()
     } finally {
       parser.close()
       reader.close()
