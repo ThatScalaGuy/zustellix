@@ -14,7 +14,7 @@ class LaufzettelSinkSpec extends CatsEffectSuite {
     recipientAgs = "01001000",
     recipientUri = URI.create("https://example/osci"),
     status       = "OK",
-    rawXml       = "<x/>"
+    rawXml       = Some("<x/>")
   )
 
   test("noop sink completes with Unit") {

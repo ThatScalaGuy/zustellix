@@ -19,7 +19,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
     subject:   String,
     transport: OsciTransport[F],
     resolver:  AgsResolver[F],
-    sink:      LaufzettelSink[F]
+    sink:      LaufzettelSink[F],
+    capturePayloads: Boolean = false
 ) extends OsciClient[F] {
 
   def request(ags: String, xml: String): F[OsciResponse] =
@@ -35,7 +36,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                   recipientAgs = ags,
                   recipientUri = route.addresseeUri,
                   status       = result.status,
-                  rawXml       = result.responseXml.getOrElse(""),
+                  rawXml       = if capturePayloads then result.responseXml else None,
                   warnings     = result.warnings,
                   contentSignature = result.signature
                 )
@@ -61,7 +62,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                    recipientAgs = ags,
                    recipientUri = route.addresseeUri,
                    status       = receipt.status,
-                   rawXml       = "", // async: no response payload at store time
+                   rawXml       = None, // async: no response payload at store time
                    warnings     = receipt.warnings
                  )
       _       <- sink.record(tenantId, lz).attempt.void
@@ -72,7 +73,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
    *  success-only: `status` carries the OSCI feedback code for a `9xxx`
    *  response and the error kind otherwise, `messageId` the id from
    *  `GetMessageId` when one was issued before the failure ("" otherwise),
-   *  `rawXml` stays empty. `recipientUri` is the resolved addressee URI, or
+   *  `rawXml` stays `None`. `recipientUri` is the resolved addressee URI, or
    *  empty when the resolver itself failed. Recording is best-effort — the
    *  original error is re-raised untouched, and a sink failure is swallowed
    *  like on the success path.
@@ -85,7 +86,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
         recipientAgs = ags,
         recipientUri = uri.getOrElse(URI.create("")),
         status       = failureStatus(e),
-        rawXml       = ""
+        rawXml       = None
       )
       sink.record(tenantId, lz).attempt.void
     }

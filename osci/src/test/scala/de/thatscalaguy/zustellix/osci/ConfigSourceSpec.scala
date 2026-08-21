@@ -154,6 +154,46 @@ class ConfigSourceSpec extends CatsEffectSuite {
     }
   }
 
+  test("file parses optional capturePayloads and defaults it to false when absent") {
+    val props =
+      """tenant.alice.cert.type       = pkcs12
+        |tenant.alice.cert.path       = /keys/alice.p12
+        |tenant.alice.cert.password   = pw
+        |tenant.alice.capturePayloads = true
+        |tenant.bob.cert.type         = pkcs12
+        |tenant.bob.cert.path         = /keys/bob.p12
+        |tenant.bob.cert.password     = pw
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.map { m =>
+      assertEquals(m(TenantId("alice")).capturePayloads, true)
+      assertEquals(m(TenantId("bob")).capturePayloads, false)
+    }
+  }
+
+  test("file raises Config error on an unknown capturePayloads value") {
+    val props =
+      """tenant.alice.cert.type       = pkcs12
+        |tenant.alice.cert.path       = /keys/alice.p12
+        |tenant.alice.cert.password   = pw
+        |tenant.alice.capturePayloads = yes
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.attempt.map {
+      case Left(e: OsciError.Config) =>
+        assert(e.getMessage.contains("capturePayloads"), e.getMessage)
+      case other => fail(s"expected Config error, got $other")
+    }
+  }
+
   test("file raises Config error on missing required cert.path") {
     val props =
       """tenant.broken.cert.type     = pkcs12

@@ -78,6 +78,16 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   access compile unchanged; pattern matches that destructure every field
 >   need the new one, and codecs/schemas derived from the case-class shape
 >   (circe, doobie, a DB table mirroring `Laufzettel`) must add it.
+> - `Laufzettel.rawXml` is now `Option[String]` and **empty by default**. The
+>   decrypted response XML of a `request` contains personal data, so it is no
+>   longer handed to the sink unless payload capture is explicitly enabled
+>   with `OsciConfig.capturePayloads = true` (properties key
+>   `tenant.<id>.capturePayloads`) — see [Laufzettel](#laufzettel). With
+>   capture on, a response without extractable content is `None` (instead of
+>   the former `""`); for `send` and failure records it is always `None`.
+>   Codecs/schemas derived from the case-class shape (circe, doobie, a DB
+>   table mirroring `Laufzettel`) must make the column nullable, and sinks
+>   that relied on the payload must opt in.
 > - `OsciClient.request` / `OsciFacade.request` now return `F[OsciResponse]`
 >   instead of `F[String]`: the response payload moved to
 >   `OsciResponse.xml: Option[String]` — `None` (instead of the former `""`)
@@ -114,7 +124,7 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   [Laufzettel](#laufzettel)). Sinks that treated every record as a
 >   delivered message must check `status`: `0xxx` / `3xxx` is delivered,
 >   anything else (a `9xxx` code or an error kind like `OsciTransport`) is a
->   failure record with empty `rawXml`.
+>   failure record with `rawXml = None`.
 
 ---
 
@@ -682,6 +692,7 @@ tenant.flensburg.subject          = XMeld
 tenant.flensburg.connectTimeoutMs = 5000
 tenant.flensburg.readTimeoutMs    = 60000
 tenant.flensburg.contentSignatures = require
+tenant.flensburg.capturePayloads   = true
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -692,7 +703,9 @@ tenant.kiel.cert.password = optional-key-password
 (`serviceUri` and `subject` are optional and default to the XMeld
 Personensuche WSDL and `XMeld`; `connectTimeoutMs` / `readTimeoutMs` are
 optional and default to 10 s / 120 s; `contentSignatures` is optional —
-`require` or `warn`, default `warn`.)
+`require` or `warn`, default `warn`; `capturePayloads` is optional —
+`true` stores the decrypted response XML on `Laufzettel.rawXml`, default
+`false`, see [Laufzettel](#laufzettel).)
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
 per tenant cert/intermediary.
@@ -719,8 +732,7 @@ OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 
 Each `request` / `send` produces a `Laufzettel(messageId, timestamp,
 recipientAgs, recipientUri, status, rawXml, warnings, contentSignature)`
-handed to a `LaufzettelSink[F]` (for `send`, `rawXml` is empty and
-`contentSignature` is `None` — there is no response payload at store time):
+handed to a `LaufzettelSink[F]`:
 
 ```scala
 LaufzettelSink.console[IO]   // prints a one-line summary
@@ -731,6 +743,20 @@ val toDb: LaufzettelSink[IO] = new LaufzettelSink[IO]:
   def record(tenant: TenantId, l: Laufzettel): IO[Unit] = repo.insert(tenant, l)
 ```
 
+**`rawXml` is `None` by default.** The decrypted response XML of a `request`
+(e.g. an XMeld Personensuche answer) contains personal data, and whatever
+the sink writes to — a DB, a queue, a log shipper — would persist it with
+every record. Set `OsciConfig.capturePayloads = true` (properties key
+`tenant.<id>.capturePayloads`) to store it on the Laufzettel; do that only
+when the sink is meant to hold the payload and your data-protection rules
+(retention, access, deletion) cover it. The caller always gets the payload
+via `OsciResponse.xml` — capture only affects what the sink sees.
+
+For `send` there is no response payload at store time, so `rawXml` and
+`contentSignature` stay `None` regardless of the flag. The content signature
+of a `request` response is verified independently of capture —
+`contentSignature` is filled even when `rawXml` is not.
+
 Failed deliveries are recorded too, so the sink sees the complete audit
 trail, not just successes. For a failure Laufzettel:
 
@@ -739,7 +765,7 @@ trail, not just successes. For a failure Laufzettel:
   `OsciTransport`, `AgsNotInDvdv`);
 - `messageId` is the id issued by `GetMessageId` when the delivery got that
   far, `""` otherwise;
-- `rawXml` is empty, `warnings` is `Nil`;
+- `rawXml` is `None`, `warnings` is `Nil`;
 - `recipientUri` is empty when the resolver itself failed (no route exists).
 
 Recording stays best-effort in both directions: a sink failure never fails

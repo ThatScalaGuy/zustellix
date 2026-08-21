@@ -18,6 +18,12 @@ import scala.concurrent.duration.FiniteDuration
  *  `contentSignatures` sets how strictly the author's content signature on
  *  received response content (synchronous `request` answers) is enforced —
  *  see [[ContentSignaturePolicy]].
+ *
+ *  `capturePayloads` opts in to storing the decrypted response XML of a
+ *  `request` on [[Laufzettel.rawXml]]. Off by default: XMeld responses
+ *  contain personal data, and every `LaufzettelSink` (DB, queue, log
+ *  shipper) would persist it. Enable only when the sink is meant to hold
+ *  the payload and handles it accordingly.
  */
 final case class OsciConfig(
     tenantId: TenantId,
@@ -30,7 +36,8 @@ final case class OsciConfig(
     subject: String = OsciConfig.DefaultSubject,
     connectTimeout: FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
     readTimeout: FiniteDuration = OsciHttpTransport.DefaultReadTimeout,
-    contentSignatures: ContentSignaturePolicy = ContentSignaturePolicy.Warn
+    contentSignatures: ContentSignaturePolicy = ContentSignaturePolicy.Warn,
+    capturePayloads: Boolean = false
 )
 
 object OsciConfig {
