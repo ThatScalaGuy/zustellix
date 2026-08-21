@@ -241,6 +241,11 @@ directory fails fast). A corrupt `<alias>.p12` is logged and skipped — the
 rest still swap in. The active map always reflects current disk truth, so a
 rotated-away cert is never served stale.
 
+`zustellix-utils` depends only on `log4cats-core`, so to use `Slf4jFactory`
+as shown above, add `org.typelevel::log4cats-slf4j` plus an SLF4J backend
+(e.g. `logback-classic`) to your own build — or provide any other
+`LoggerFactory[F]` implementation.
+
 ---
 
 ## `dvdv` — DVDV2 directory client

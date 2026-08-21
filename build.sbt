@@ -14,7 +14,6 @@ val CirceV = "0.14.16"
 val MulesV = "0.7.0"
 val JwtScalaV = "11.0.4"
 val Log4catsV = "2.8.0"
-val LogbackV = "1.5.18"
 val BouncyV = "1.84"
 val MunitCEV = "2.2.0"
 val ProxyVoleV = "1.1.9"
@@ -44,8 +43,7 @@ lazy val utils = (project in file("utils"))
       "org.typelevel" %% "cats-effect" % CatsEffectV,
       "org.bouncycastle" % "bcprov-jdk18on" % BouncyV,
       "org.bouncycastle" % "bcpkix-jdk18on" % BouncyV,
-      "org.typelevel" %% "log4cats-slf4j" % Log4catsV,
-      "ch.qos.logback" % "logback-classic" % LogbackV % Runtime,
+      "org.typelevel" %% "log4cats-core" % Log4catsV,
       "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
       "org.typelevel" %% "log4cats-noop" % Log4catsV % Test
     ),
@@ -69,8 +67,6 @@ lazy val dvdv = (project in file("dvdv"))
       "io.circe" %% "circe-parser" % CirceV,
       "io.chrisdavenport" %% "mules" % MulesV,
       "com.github.jwt-scala" %% "jwt-circe" % JwtScalaV,
-      "org.typelevel" %% "log4cats-slf4j" % Log4catsV,
-      "ch.qos.logback" % "logback-classic" % LogbackV % Runtime,
       "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
       "org.http4s" %% "http4s-ember-server" % Http4sV % Test,
       "org.typelevel" %% "log4cats-noop" % Log4catsV % Test
