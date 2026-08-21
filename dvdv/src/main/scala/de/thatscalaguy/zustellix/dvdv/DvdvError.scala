@@ -46,4 +46,17 @@ object DvdvError {
    */
   final case class InvalidCategory(input: String)
       extends DvdvError(s"Invalid category '$input': expected 1 to 255 characters")
+
+  /** A batch endpoint received more than 200 requests (the spec's
+   *  `maxItems: 200`) — raised client-side before any HTTP call.
+   */
+  final case class BatchTooLarge(size: Int)
+      extends DvdvError(s"Batch of $size requests exceeds the DVDV limit of 200 items per call — split the batch client-side")
+
+  /** A batch response array's length differed from the request list's,
+   *  breaking the positional one-result-per-request contract — raised
+   *  instead of returning silently misaligned results.
+   */
+  final case class BatchSizeMismatch(expected: Int, actual: Int)
+      extends DvdvError(s"Batch response holds $actual results for $expected requests — positional alignment lost")
 }

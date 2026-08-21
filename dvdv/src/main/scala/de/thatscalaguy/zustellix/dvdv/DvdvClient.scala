@@ -51,11 +51,35 @@ trait DvdvClient[F[_]] {
   def findServiceSpecificationUrisByCategory(category: Category): F[List[String]]
   def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult]
 
-  // 6 batch POSTs
-  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]
+  // 6 batch POSTs.
+  //
+  // All batch methods raise [[DvdvError.BatchTooLarge]] before any HTTP call
+  // when given more than 200 requests (the spec's `maxItems: 200`). A typed
+  // error was chosen over transparent chunking because chunking multiplies
+  // authenticated wire calls invisibly and cannot preserve atomicity if a
+  // later chunk fails. A response array whose length differs from the input
+  // list raises [[DvdvError.BatchSizeMismatch]] instead of returning
+  // silently misaligned results.
+
+  /** Batch variant of [[findAuthorityDescription]]. Results are positionally
+   *  aligned with the input `requests` list. A per-item miss is assumed to be
+   *  encoded as a positional JSON null — mirroring the 204/404 miss semantics
+   *  of the single-call variant; the OpenAPI spec does not specify the batch
+   *  miss encoding — and decodes to `None` at that index. Raises
+   *  [[DvdvError.BatchTooLarge]] for more than 200 requests.
+   */
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[Option[OrganizationDescription]]]
   def batchFindCategories(requests: List[Request]): F[List[List[String]]]
   def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]]
-  def batchFindServiceDescription(requests: List[Request]): F[List[Service]]
+
+  /** Batch variant of [[findServiceDescription]]. Results are positionally
+   *  aligned with the input `requests` list. A per-item miss is assumed to be
+   *  encoded as a positional JSON null — mirroring the 204/404 miss semantics
+   *  of the single-call variant; the OpenAPI spec does not specify the batch
+   *  miss encoding — and decodes to `None` at that index. Raises
+   *  [[DvdvError.BatchTooLarge]] for more than 200 requests.
+   */
+  def batchFindServiceDescription(requests: List[Request]): F[List[Option[Service]]]
   def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]]
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 }

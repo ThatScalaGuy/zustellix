@@ -1,7 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv.internal
 
 import cats.effect.{IO, Ref}
-import de.thatscalaguy.zustellix.dvdv.DvdvConfig
+import de.thatscalaguy.zustellix.dvdv.{DvdvConfig, DvdvError}
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import de.thatscalaguy.zustellix.dvdv.model.*
 import io.circe.syntax.*
@@ -93,7 +93,10 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
           Ok(List(VerificationResult(true), VerificationResult(false)).asJson)
     }
     val c = client(routes)
-    val input = List(Request(fingerPrint = Some("fp1"), category = Some("c1")))
+    val input = List(
+      Request(fingerPrint = Some("fp1"), category = Some("c1")),
+      Request(fingerPrint = Some("fp2"), category = Some("c2"))
+    )
     for {
       out <- c.batchVerifyCategory(input)
       seenIn <- seen.get
@@ -148,7 +151,70 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findauthoritydescription" =>
         Ok(List(OrganizationDescription(), OrganizationDescription()).asJson)
     }
-    client(routes).batchFindAuthorityDescription(List(Request())).map(r => assertEquals(r.size, 2))
+    client(routes).batchFindAuthorityDescription(List(Request(), Request())).map { r =>
+      assertEquals(r, List(Some(OrganizationDescription()), Some(OrganizationDescription())))
+    }
+  }
+
+  test("batchFindAuthorityDescription decodes a positional null as None") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findauthoritydescription" =>
+        Ok(List(Some(OrganizationDescription()), None, Some(OrganizationDescription())).asJson)
+    }
+    val input = List(Request(), Request(), Request())
+    client(routes).batchFindAuthorityDescription(input).map { r =>
+      assertEquals(r, List(Some(OrganizationDescription()), None, Some(OrganizationDescription())))
+    }
+  }
+
+  test("batchFindServiceDescription decodes a positional null as None") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findservicedescription" =>
+        Ok(List(Some(Service(id = Some(1L))), None).asJson)
+    }
+    client(routes).batchFindServiceDescription(List(Request(), Request())).map { r =>
+      assertEquals(r, List(Some(Service(id = Some(1L))), None))
+    }
+  }
+
+  test("batch endpoints accept an empty batch") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findauthoritydescription" =>
+        Ok(List.empty[Option[OrganizationDescription]].asJson)
+    }
+    client(routes).batchFindAuthorityDescription(Nil).map(r => assertEquals(r, Nil))
+  }
+
+  test("batch endpoints raise BatchSizeMismatch when the response length differs") {
+    val routes = HttpRoutes.of[IO] {
+      case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findauthoritydescription" =>
+        Ok(List(Some(OrganizationDescription())).asJson)
+    }
+    interceptIO[DvdvError.BatchSizeMismatch](
+      client(routes).batchFindAuthorityDescription(List(Request(), Request()))
+    ).map { e =>
+      assertEquals(e.expected, 2)
+      assertEquals(e.actual, 1)
+    }
+  }
+
+  test("batch endpoints reject more than 200 requests before any HTTP call") {
+    val calls = Ref.unsafe[IO, Int](0)
+    val routes = HttpRoutes.of[IO] {
+      case req @ POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "verifycategory" =>
+        calls.update(_ + 1) *>
+          req.as[List[Request]].flatMap(rs => Ok(List.fill(rs.size)(VerificationResult(true)).asJson))
+    }
+    val c = client(routes)
+    for {
+      _ <- interceptIO[DvdvError.BatchTooLarge](c.batchVerifyCategory(List.fill(201)(Request())))
+      n <- calls.get
+      _ <- c.batchVerifyCategory(List.fill(200)(Request())) // exactly 200 is allowed
+      m <- calls.get
+    } yield {
+      assertEquals(n, 0)
+      assertEquals(m, 1)
+    }
   }
 
   test("batchFindOrganizationsByServiceElement decodes an array of arrays of organizations") {
@@ -156,7 +222,7 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findOrganizationsByServiceElement" =>
         Ok(List(List(LightweightOrganization(id = Some(1L))), List.empty[LightweightOrganization]).asJson)
     }
-    client(routes).batchFindOrganizationsByServiceElement(List(Request())).map { r =>
+    client(routes).batchFindOrganizationsByServiceElement(List(Request(), Request())).map { r =>
       assertEquals(r.size, 2)
       assertEquals(r.head.size, 1)
     }
@@ -167,7 +233,9 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findservicedescription" =>
         Ok(List(Service(id = Some(1L))).asJson)
     }
-    client(routes).batchFindServiceDescription(List(Request())).map(r => assertEquals(r.size, 1))
+    client(routes).batchFindServiceDescription(List(Request())).map { r =>
+      assertEquals(r, List(Some(Service(id = Some(1L)))))
+    }
   }
 
   test("batchFindServiceSpecificationUrisByCategory decodes an array of arrays of strings") {
@@ -175,7 +243,7 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
       case POST -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "batch" / "findServiceSpecificationUrisByCategory" =>
         Ok(List(List("a"), List("b", "c")).asJson)
     }
-    client(routes).batchFindServiceSpecificationUrisByCategory(List(Request())).map { r =>
+    client(routes).batchFindServiceSpecificationUrisByCategory(List(Request(), Request())).map { r =>
       assertEquals(r, List(List("a"), List("b", "c")))
     }
   }

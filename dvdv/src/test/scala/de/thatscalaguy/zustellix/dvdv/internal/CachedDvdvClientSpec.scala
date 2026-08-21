@@ -26,10 +26,10 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     def findServiceDescription(k: OrganizationKey, u: String) = bump(Option.empty[Service])
     def findServiceSpecificationUrisByCategory(c: Category) = bump(List.empty[String])
     def verifyCategory(fp: Fingerprint, c: Category) = bump(VerificationResult(true))
-    def batchFindAuthorityDescription(r: List[Request]) = bump(List.empty[OrganizationDescription])
+    def batchFindAuthorityDescription(r: List[Request]) = bump(List.empty[Option[OrganizationDescription]])
     def batchFindCategories(r: List[Request]) = bump(List.empty[List[String]])
     def batchFindOrganizationsByServiceElement(r: List[Request]) = bump(List.empty[List[LightweightOrganization]])
-    def batchFindServiceDescription(r: List[Request]) = bump(List.empty[Service])
+    def batchFindServiceDescription(r: List[Request]) = bump(List.empty[Option[Service]])
     def batchFindServiceSpecificationUrisByCategory(r: List[Request]) = bump(List.empty[List[String]])
     def batchVerifyCategory(r: List[Request]) = bump(List.empty[VerificationResult])
   }

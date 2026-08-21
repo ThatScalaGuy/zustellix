@@ -3,7 +3,7 @@ package de.thatscalaguy.zustellix.dvdv.internal
 import cats.effect.Concurrent
 import cats.syntax.flatMap.*
 import cats.syntax.foldable.*
-import de.thatscalaguy.zustellix.dvdv.{DvdvClient, DvdvConfig}
+import de.thatscalaguy.zustellix.dvdv.{DvdvClient, DvdvConfig, DvdvError}
 import de.thatscalaguy.zustellix.dvdv.model.*
 import io.circe.syntax.*
 import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
@@ -116,32 +116,44 @@ final class HttpDvdvClient[F[_]: Concurrent](
   }
 
   // --- 6 batch POSTs ---
-  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]] =
-    batchPost[List[OrganizationDescription]]("findauthoritydescription", requests)
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[Option[OrganizationDescription]]] =
+    batchPost[Option[OrganizationDescription]]("findauthoritydescription", requests)
 
   def batchFindCategories(requests: List[Request]): F[List[List[String]]] =
-    batchPost[List[List[String]]]("findcategories", requests)
+    batchPost[List[String]]("findcategories", requests)
 
   def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]] =
-    batchPost[List[List[LightweightOrganization]]]("findOrganizationsByServiceElement", requests)
+    batchPost[List[LightweightOrganization]]("findOrganizationsByServiceElement", requests)
 
-  def batchFindServiceDescription(requests: List[Request]): F[List[Service]] =
-    batchPost[List[Service]]("findservicedescription", requests)
+  def batchFindServiceDescription(requests: List[Request]): F[List[Option[Service]]] =
+    batchPost[Option[Service]]("findservicedescription", requests)
 
   def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]] =
-    batchPost[List[List[String]]]("findServiceSpecificationUrisByCategory", requests)
+    batchPost[List[String]]("findServiceSpecificationUrisByCategory", requests)
 
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]] =
-    batchPost[List[VerificationResult]]("verifycategory", requests)
+    batchPost[VerificationResult]("verifycategory", requests)
 
-  private def batchPost[A: io.circe.Decoder](name: String, requests: List[Request]): F[A] = {
-    val uri = base / "batch" / name
-    val req = HttpRequest[F](Method.POST, uri).withEntity(requests.asJson)
-    http.run(req).use(ResponseDecoder.required[F, A](_))
-  }
+  private def batchPost[B: io.circe.Decoder](name: String, requests: List[Request]): F[List[B]] =
+    if (requests.sizeIs > HttpDvdvClient.MaxBatchItems)
+      Concurrent[F].raiseError(DvdvError.BatchTooLarge(requests.size))
+    else {
+      val uri = base / "batch" / name
+      val req = HttpRequest[F](Method.POST, uri).withEntity(requests.asJson)
+      http.run(req).use(ResponseDecoder.required[F, List[B]](_)).flatMap { results =>
+        if (results.sizeIs == requests.size) Concurrent[F].pure(results)
+        else Concurrent[F].raiseError(DvdvError.BatchSizeMismatch(requests.size, results.size))
+      }
+    }
 }
 
 object HttpDvdvClient {
+
+  /** The spec's `maxItems: 200` on every batch request body — enforced
+   *  client-side so oversized batches fail before any HTTP call.
+   */
+  private val MaxBatchItems = 200
+
   def apply[F[_]: Concurrent](http: Client[F], config: DvdvConfig): HttpDvdvClient[F] =
     new HttpDvdvClient[F](http, config)
 }

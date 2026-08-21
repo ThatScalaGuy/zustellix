@@ -118,7 +118,7 @@ object CachedDvdvClient {
       )
 
     // Batch endpoints — not cached; delegate.
-    def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]] =
+    def batchFindAuthorityDescription(requests: List[Request]): F[List[Option[OrganizationDescription]]] =
       underlying.batchFindAuthorityDescription(requests)
 
     def batchFindCategories(requests: List[Request]): F[List[List[String]]] =
@@ -127,7 +127,7 @@ object CachedDvdvClient {
     def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]] =
       underlying.batchFindOrganizationsByServiceElement(requests)
 
-    def batchFindServiceDescription(requests: List[Request]): F[List[Service]] =
+    def batchFindServiceDescription(requests: List[Request]): F[List[Option[Service]]] =
       underlying.batchFindServiceDescription(requests)
 
     def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]] =

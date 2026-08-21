@@ -410,6 +410,8 @@ val batch = List(
   Request(category = Some("Meldebehörde"), organizationKey = Some("ags:01001000")),
   Request(category = Some("Meldebehörde"), organizationKey = Some("ags:02000000"))
 )
+// Results align positionally with the input; a per-item miss decodes to None.
+// More than 200 requests raise DvdvError.BatchTooLarge before any HTTP call.
 dvdv.batchFindAuthorityDescription(batch)
 ```
 
@@ -452,10 +454,10 @@ trait DvdvClient[F[_]]:
   def findServiceSpecificationUrisByCategory(category: Category): F[List[String]]
   def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult]
 
-  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[Option[OrganizationDescription]]]
   def batchFindCategories(requests: List[Request]): F[List[List[String]]]
   def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]]
-  def batchFindServiceDescription(requests: List[Request]): F[List[Service]]
+  def batchFindServiceDescription(requests: List[Request]): F[List[Option[Service]]]
   def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]]
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 ```
