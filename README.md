@@ -186,6 +186,11 @@ SHA-1 fingerprint hex, and the leaf-first certificate chain the source
 provides). The DVDV/OSCI clients call this for you — you rarely touch it
 directly.
 
+A PKCS12 source must contain exactly one private-key entry — with several
+entries loading fails rather than picking one arbitrarily — and the store
+password is also used as the entry password, as produced by
+`openssl pkcs12 -export` and keytool.
+
 `toString` is redacted on every case, so a `CertSource` (or a config holding
 one) can be logged without leaking its password.
 

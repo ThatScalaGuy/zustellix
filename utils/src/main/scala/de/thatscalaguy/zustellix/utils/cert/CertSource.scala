@@ -15,10 +15,18 @@ import java.nio.file.Path
 sealed trait CertSource
 
 object CertSource {
+
+  /** A PKCS12 keystore file. It must contain exactly one private-key entry —
+   *  loading fails with a descriptive error otherwise — and `password` opens
+   *  both the store and the key entry (openssl/keytool convention).
+   */
   final case class Pkcs12(path: Path, password: String) extends CertSource {
     override def toString: String = s"Pkcs12($path, <redacted>)"
   }
 
+  /** In-memory PKCS12 keystore bytes; same entry and password rules as
+   *  [[Pkcs12]].
+   */
   final case class Pkcs12Bytes(bytes: Array[Byte], password: String) extends CertSource {
     override def toString: String = s"Pkcs12Bytes(${bytes.length} bytes, <redacted>)"
   }

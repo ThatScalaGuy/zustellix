@@ -9,6 +9,7 @@ import java.nio.file.{Files, Paths}
 import java.security.cert.X509Certificate
 import java.security.{KeyPair, KeyPairGenerator, KeyStore}
 import java.util.Date
+import javax.crypto.spec.SecretKeySpec
 import javax.security.auth.x500.X500Principal
 
 class CertLoaderSpec extends CatsEffectSuite {
@@ -185,5 +186,68 @@ class CertLoaderSpec extends CatsEffectSuite {
       assertEquals(p12.chain, List(p12.certificate))
       assertEquals(pem.chain, List(pem.certificate))
     }
+  }
+
+  // --- Alias selection on multi-entry / non-private-key keystores ---
+
+  private def buildP12(password: String)(populate: KeyStore => Unit): IO[Array[Byte]] = IO.blocking {
+    val ks = KeyStore.getInstance("PKCS12")
+    ks.load(null, null)
+    populate(ks)
+    val out = new ByteArrayOutputStream()
+    ks.store(out, password.toCharArray)
+    out.toByteArray
+  }
+
+  private def secretKeyEntry: KeyStore.SecretKeyEntry =
+    new KeyStore.SecretKeyEntry(new SecretKeySpec(Array.fill[Byte](16)(1), "AES"))
+
+  test("PKCS12 with multiple private key entries fails with a message naming all aliases") {
+    for {
+      p12 <- buildP12("pw") { ks =>
+               val keyA  = rsaKeyPair()
+               val keyB  = rsaKeyPair()
+               val certA = mintCert("multi-a", keyA, "multi-a", keyA)
+               val certB = mintCert("multi-b", keyB, "multi-b", keyB)
+               ks.setKeyEntry("alias-b", keyB.getPrivate, "pw".toCharArray, Array(certB))
+               ks.setKeyEntry("alias-a", keyA.getPrivate, "pw".toCharArray, Array(certA))
+             }
+      err <- interceptIO[IllegalArgumentException](CertLoader.loadPkcs12Bytes[IO](p12, "pw"))
+    } yield assert(err.getMessage.contains("alias-a, alias-b"), clues(err.getMessage))
+  }
+
+  test("SecretKeyEntry entries are ignored when selecting the key entry") {
+    for {
+      p12 <- buildP12("pw") { ks =>
+               val key  = rsaKeyPair()
+               val cert = mintCert("secret-mixed", key, "secret-mixed", key)
+               ks.setEntry("aaa-secret", secretKeyEntry, new KeyStore.PasswordProtection("pw".toCharArray))
+               ks.setKeyEntry("zzz-key", key.getPrivate, "pw".toCharArray, Array(cert))
+             }
+      loaded <- CertLoader.loadPkcs12Bytes[IO](p12, "pw")
+    } yield {
+      assertEquals(loaded.privateKey.getAlgorithm, "RSA")
+      assertEquals(loaded.certificate.getSubjectX500Principal, new X500Principal("CN=secret-mixed"))
+    }
+  }
+
+  test("PKCS12 containing only a secret key entry fails with the clear no-private-key-entry message") {
+    for {
+      p12 <- buildP12("pw") { ks =>
+               ks.setEntry("only-secret", secretKeyEntry, new KeyStore.PasswordProtection("pw".toCharArray))
+             }
+      err <- interceptIO[IllegalArgumentException](CertLoader.loadPkcs12Bytes[IO](p12, "pw"))
+    } yield assert(err.getMessage.contains("No private key entry"), clues(err.getMessage))
+  }
+
+  test("PKCS12 containing only trusted certificate entries fails with the same clear message") {
+    for {
+      p12 <- buildP12("pw") { ks =>
+               val key  = rsaKeyPair()
+               val cert = mintCert("trusted-only", key, "trusted-only", key)
+               ks.setCertificateEntry("trusted-only", cert)
+             }
+      err <- interceptIO[IllegalArgumentException](CertLoader.loadPkcs12Bytes[IO](p12, "pw"))
+    } yield assert(err.getMessage.contains("No private key entry"), clues(err.getMessage))
   }
 }

@@ -35,6 +35,12 @@ object CertLoader {
     case CertSource.PemBytes(c, k, p)            => loadPemBytes[F](c, k, p)
   }
 
+  /** Loads a PKCS12 keystore that contains exactly one private-key entry with a
+   *  certificate; fails with [[IllegalArgumentException]] when none or several
+   *  exist. `password` opens both the store and the key entry — the layout
+   *  produced by `openssl pkcs12 -export` and Java keytool; keystores whose
+   *  entry password differs from the store password are not supported.
+   */
   def loadPkcs12Bytes[F[_]: Sync](bytes: Array[Byte], password: String): F[LoadedCert] =
     Sync[F].blocking(fromKeyStoreStream(new ByteArrayInputStream(bytes), password))
 
@@ -49,12 +55,28 @@ object CertLoader {
     val ks = KeyStore.getInstance("PKCS12")
     ks.load(in, password.toCharArray)
 
-    val alias = ks.aliases().asScala.find(ks.isKeyEntry).getOrElse(
-      throw new IllegalArgumentException("No key entry found in PKCS12 keystore")
-    )
+    // PrivateKeyEntry (never a SecretKeyEntry or trusted cert) with a stable
+    // choice: enumeration order is unspecified, so require exactly one match.
+    val keyAliases = ks
+      .aliases()
+      .asScala
+      .toList
+      .filter(a => ks.entryInstanceOf(a, classOf[KeyStore.PrivateKeyEntry]))
+      .sorted
+    val alias = keyAliases match {
+      case Nil =>
+        throw new IllegalArgumentException("No private key entry with a certificate found in PKCS12 keystore")
+      case single :: Nil => single
+      case many =>
+        throw new IllegalArgumentException(
+          s"Multiple private key entries found in PKCS12 keystore (${many.mkString(", ")}); expected exactly one"
+        )
+    }
 
-    val pk   = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
-    val cert = ks.getCertificate(alias).asInstanceOf[X509Certificate]
+    val pk = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
+    val cert = Option(ks.getCertificate(alias))
+      .getOrElse(throw new IllegalArgumentException(s"PKCS12 key entry '$alias' has no certificate"))
+      .asInstanceOf[X509Certificate]
     val chain = Option(ks.getCertificateChain(alias))
       .map(_.toList.map(_.asInstanceOf[X509Certificate]))
       .filter(_.nonEmpty)
