@@ -276,6 +276,68 @@ class OsciBibSupportSpec extends FunSuite {
     )
   }
 
+  // withExplicitDialog is the explicit-dialog lifecycle of the bridges:
+  // InitDialog, body, best-effort ExitDialog. The thunk overload is the
+  // offline seam — a real InitDialog/ExitDialog send needs a parseable
+  // intermediary response and stays in the gated `OsciBibBridgeIT`.
+
+  test("withExplicitDialog runs init, body, exit in order and returns the body's result") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val out = withExplicitDialog(() => { calls += "init"; () }, () => { calls += "exit"; () }) {
+      calls += "body"
+      42
+    }
+    assertEquals(out, 42)
+    assertEquals(calls.toList, List("init", "body", "exit"))
+  }
+
+  test("withExplicitDialog still sends exit when the body raises, and the body's exception propagates") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(() => (), () => { calls += "exit"; () }) {
+        checkFeedback(Array(Array("de", "9000", "boom")), Some("msg-1"))
+      }
+    }
+    assertEquals(e.code, "9000")
+    assertEquals(e.messageId, Some("msg-1"))
+    assertEquals(calls.toList, List("exit"))
+  }
+
+  test("withExplicitDialog: a NonFatal exit failure is swallowed (best-effort cleanup)") {
+    val out = withExplicitDialog(() => (), () => throw new RuntimeException("exit boom"))(42)
+    assertEquals(out, 42)
+  }
+
+  test("withExplicitDialog: an exit failure does not mask the body's exception") {
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(() => (), () => throw new RuntimeException("exit boom")) {
+        throw OsciError.OsciResponse("9000", "delivery rejected", Some("msg-1"))
+      }
+    }
+    assertEquals(e.code, "9000")
+  }
+
+  test("withExplicitDialog: a failing init propagates and exit is not attempted") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    intercept[RuntimeException] {
+      withExplicitDialog(() => throw new RuntimeException("init boom"), () => { calls += "exit"; () }) {
+        calls += "body"
+      }
+    }
+    assertEquals(calls.toList, Nil)
+  }
+
+  test("withExplicitDialog: a fatal exit exception is not swallowed") {
+    // munit's intercept itself only catches NonFatal, so catch by hand.
+    val propagated =
+      try {
+        withExplicitDialog(() => (), () => throw new InterruptedException())(42)
+        false
+      }
+      catch case _: InterruptedException => true
+    assert(propagated, "expected the fatal exit exception to propagate")
+  }
+
   test("parseInstant handles the offset xsd:dateTime form") {
     assertEquals(
       parseInstant("2026-05-13T12:00:00+02:00"),

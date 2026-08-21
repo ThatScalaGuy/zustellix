@@ -8,17 +8,19 @@ import de.thatscalaguy.zustellix.osci.{
 }
 
 import de.osci.osci12.OSCIException
-import de.osci.osci12.common.{OSCIErrorException, SoapServerException}
+import de.osci.osci12.common.{DialogHandler, OSCIErrorException, SoapServerException}
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
+import de.osci.osci12.messagetypes.{ExitDialog, InitDialog}
 import de.osci.osci12.roles.{Addressee, Originator, Role}
 
 import java.security.GeneralSecurityException
 import java.time.{Instant, OffsetDateTime}
 import scala.util.Try
+import scala.util.control.NonFatal
 
-/** Pure helpers shared by the OSCI bridges (outbound and mailbox). All
- *  feedback and content handling of osci-bibliothek messages lives here so it
- *  can be unit-tested without a gateway.
+/** Helpers shared by the OSCI bridges (outbound and mailbox). Feedback and
+ *  content handling of osci-bibliothek messages and the explicit-dialog
+ *  lifecycle live here so they can be unit-tested without a gateway.
  */
 private[osci] object OsciBibSupport {
 
@@ -136,6 +138,32 @@ private[osci] object OsciBibSupport {
     val encrypted = new EncryptedDataOSCI(container)
     encrypted.encrypt(encryptFor)
     encrypted
+  }
+
+  /** Explicit-dialog lifecycle shared by the bridges: `body` runs between an
+   *  `InitDialog` and a best-effort `ExitDialog`. The exit is attempted
+   *  exactly when the init succeeded — a failed delivery (send error, 9xxx
+   *  feedback) must not leave the dialog open at the intermediary. A NonFatal
+   *  exit failure is swallowed so the body's outcome (result or exception)
+   *  wins.
+   */
+  def withExplicitDialog[A](dialog: DialogHandler)(body: => A): A =
+    withExplicitDialog(
+      () => { new InitDialog(dialog).send(); () },
+      () => { new ExitDialog(dialog).send(); () }
+    )(body)
+
+  /** Thunk seam for the overload above so the lifecycle is unit-testable
+   *  without a gateway (a real InitDialog/ExitDialog send needs a parseable
+   *  intermediary response).
+   */
+  def withExplicitDialog[A](init: () => Unit, exit: () => Unit)(body: => A): A = {
+    init()
+    try body
+    finally {
+      try exit()
+      catch case NonFatal(_) => () // best-effort cleanup
+    }
   }
 
   def parseTimestamp(ts: Timestamp): Option[Instant] =

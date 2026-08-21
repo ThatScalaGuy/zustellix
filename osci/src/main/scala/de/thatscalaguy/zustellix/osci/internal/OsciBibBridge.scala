@@ -8,13 +8,7 @@ import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciRe
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
 import de.osci.osci12.extinterfaces.crypto.{Decrypter, Signer}
-import de.osci.osci12.messagetypes.{
-  ExitDialog,
-  GetMessageId,
-  InitDialog,
-  MediateDelivery,
-  StoreDelivery
-}
+import de.osci.osci12.messagetypes.{GetMessageId, MediateDelivery, StoreDelivery}
 import de.osci.osci12.roles.{Addressee, Intermed, Originator}
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
@@ -113,21 +107,19 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         val msgIdResp = new GetMessageId(dialog).send()
         checkFeedback(msgIdResp.getFeedback)
 
-        new InitDialog(dialog).send()
+        val rsp = withExplicitDialog(dialog) {
+          val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
+          mediate.setMessageId(msgIdResp.getMessageId)
+          mediate.setSubject(subject)
+          mediate.setQualityOfTimeStampCreation(false)
+          mediate.setQualityOfTimeStampReception(false)
 
-        val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
-        mediate.setMessageId(msgIdResp.getMessageId)
-        mediate.setSubject(subject)
-        mediate.setQualityOfTimeStampCreation(false)
-        mediate.setQualityOfTimeStampReception(false)
+          mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
-        mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
-
-        val rsp = mediate.send()
-        checkFeedback(rsp.getFeedback, Option(msgIdResp.getMessageId))
-
-        try new ExitDialog(dialog).send()
-        catch case _: Throwable => () // best-effort cleanup
+          val r = mediate.send()
+          checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
+          r
+        }
 
         // The synchronous answer comes back encrypted to our cipher cert
         // (the OSCI roles swap: our Originator becomes the response's
@@ -164,20 +156,18 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         val msgIdResp = new GetMessageId(dialog).send()
         checkFeedback(msgIdResp.getFeedback)
 
-        new InitDialog(dialog).send()
+        val rsp = withExplicitDialog(dialog) {
+          val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
+          storeDelivery.setSubject(subject)
+          storeDelivery.setQualityOfTimeStampCreation(false)
+          storeDelivery.setQualityOfTimeStampReception(false)
 
-        val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
-        storeDelivery.setSubject(subject)
-        storeDelivery.setQualityOfTimeStampCreation(false)
-        storeDelivery.setQualityOfTimeStampReception(false)
+          storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
-        storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
-
-        val rsp = storeDelivery.send()
-        checkFeedback(rsp.getFeedback, Option(msgIdResp.getMessageId))
-
-        try new ExitDialog(dialog).send()
-        catch case _: Throwable => () // best-effort cleanup
+          val r = storeDelivery.send()
+          checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
+          r
+        }
 
         OsciReceipt(
           messageId = msgIdResp.getMessageId,

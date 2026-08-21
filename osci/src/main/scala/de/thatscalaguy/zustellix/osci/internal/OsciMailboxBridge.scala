@@ -12,13 +12,7 @@ import de.thatscalaguy.zustellix.osci.{
 
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
-import de.osci.osci12.messagetypes.{
-  ExitDialog,
-  FetchDelivery,
-  FetchProcessCard,
-  InitDialog,
-  OSCIMessage
-}
+import de.osci.osci12.messagetypes.{FetchDelivery, FetchProcessCard, OSCIMessage}
 import de.osci.osci12.roles.{Intermed, Originator}
 
 /** osci-bibliothek-backed mailbox. The same Originator role that signs the
@@ -93,16 +87,12 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
     }
 
   /** Fetch message types require an explicit dialog (the library enforces a
-   *  ConversationID): InitDialog first, ExitDialog best-effort afterwards.
+   *  ConversationID): InitDialog first, ExitDialog best-effort afterwards —
+   *  see [[OsciBibSupport.withExplicitDialog]].
    */
   private def withDialog[A](f: DialogHandler => A): A = {
     val intermed = new Intermed(null, config.intermedCipherCert, config.intermedUri)
     val dialog   = new DialogHandler(originator, intermed, transport)
-    new InitDialog(dialog).send()
-    try f(dialog)
-    finally {
-      try new ExitDialog(dialog).send()
-      catch case _: Throwable => () // best-effort cleanup
-    }
+    withExplicitDialog(dialog)(f(dialog))
   }
 }
