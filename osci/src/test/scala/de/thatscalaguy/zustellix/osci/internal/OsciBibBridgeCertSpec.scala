@@ -1,7 +1,8 @@
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.IO
-import de.thatscalaguy.zustellix.utils.cert.CertSource
+import de.thatscalaguy.zustellix.osci.OsciError
+import de.thatscalaguy.zustellix.utils.cert.{CertCredential, CertSource}
 import munit.CatsEffectSuite
 
 import java.nio.file.{Files, Path, Paths}
@@ -46,6 +47,32 @@ class OsciBibBridgeCertSpec extends CatsEffectSuite {
       fromPem   <- OsciBibBridge.originator[IO](CertSource.PemBytes(certBytes, keyBytes))
       fromP12   <- OsciBibBridge.originator[IO](CertSource.Pkcs12(p12Path, "test"))
     } yield assertEquals(fromPem.getSignatureCertificate, fromP12.getSignatureCertificate)
+  }
+
+  test("wrong PKCS12 password raises OsciError.Certificate") {
+    interceptIO[OsciError.Certificate](
+      OsciBibBridge.originator[IO](CertSource.Pkcs12(p12Path, "wrong-password"))
+    ).map(e => assert(e.getCause != null, "cause must be preserved"))
+  }
+
+  test("missing PKCS12 file raises OsciError.Certificate") {
+    interceptIO[OsciError.Certificate](
+      OsciBibBridge.originator[IO](CertSource.Pkcs12(Paths.get("/no/such/file.p12"), "test"))
+    ).map(e => assert(e.getCause.isInstanceOf[java.nio.file.NoSuchFileException]))
+  }
+
+  test("corrupt PKCS12 bytes via CertCredential raise OsciError.Certificate") {
+    interceptIO[OsciError.Certificate](
+      OsciBibBridge.originator[IO](CertCredential(Array[Byte](1, 2, 3), "test"))
+    )
+  }
+
+  test("wrong password via CertCredential raises OsciError.Certificate") {
+    IO.blocking(Files.readAllBytes(p12Path)).flatMap { bytes =>
+      interceptIO[OsciError.Certificate](
+        OsciBibBridge.originator[IO](CertCredential(bytes, "wrong-password"))
+      )
+    }
   }
 
   test("unparseable PEM bytes fail") {

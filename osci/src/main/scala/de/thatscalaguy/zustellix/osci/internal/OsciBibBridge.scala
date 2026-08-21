@@ -3,7 +3,7 @@ package de.thatscalaguy.zustellix.osci.internal
 import cats.effect.{Resource, Sync}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{CertCredential, CertSource}
-import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciReceipt}
+import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciReceipt}
 
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
@@ -18,8 +18,8 @@ import de.osci.osci12.messagetypes.{
 import de.osci.osci12.roles.{Addressee, Intermed, Originator}
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
-import java.io.ByteArrayInputStream
-import java.security.Security
+import java.io.{ByteArrayInputStream, IOException}
+import java.security.{GeneralSecurityException, Security}
 
 private[osci] object OsciBibBridge {
 
@@ -47,7 +47,8 @@ private[osci] object OsciBibBridge {
    *  osci-bibliothek's `PKCS12Signer`/`PKCS12Decrypter` consume PKCS12
    *  streams only, so PEM sources are converted to an in-memory PKCS12
    *  first. Also used by the mailbox bridge, where the same role fetches
-   *  and decrypts inbound deliveries.
+   *  and decrypts inbound deliveries. Keystore failures (wrong password,
+   *  unreadable file, keystore errors) are raised as [[OsciError.Certificate]].
    */
   def originator[F[_]: Sync](certSource: CertSource): F[Originator] =
     build[F](buildSignerDecrypter[F](certSource))
@@ -68,12 +69,21 @@ private[osci] object OsciBibBridge {
     }
 
   private def buildSignerDecrypter[F[_]: Sync](certSource: CertSource): F[(Signer, Decrypter)] =
-    CertCredential.fromSource[F](certSource).flatMap { cred =>
-      Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password))
-    }
+    CertCredential
+      .fromSource[F](certSource)
+      .flatMap { cred =>
+        Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password))
+      }
+      .adaptError {
+        case e: GeneralSecurityException => OsciError.Certificate(e)
+        case e: IOException              => OsciError.Certificate(e)
+      }
 
   private def buildSignerDecrypter[F[_]: Sync](cred: CertCredential): F[(Signer, Decrypter)] =
-    Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password))
+    Sync[F].blocking(fromPkcs12Bytes(cred.pkcs12, cred.password)).adaptError {
+      case e: GeneralSecurityException => OsciError.Certificate(e)
+      case e: IOException              => OsciError.Certificate(e)
+    }
 
   /** osci-bibliothek consumes the stream, so the signer and the decrypter each
    *  get their own over the same bytes.
