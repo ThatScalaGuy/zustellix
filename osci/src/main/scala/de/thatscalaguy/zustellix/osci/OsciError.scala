@@ -40,6 +40,22 @@ object OsciError {
   final case class NoSuchMessage(messageId: String)
       extends OsciError(s"No delivery found for messageId '$messageId'")
 
+  /** Received content carries no author signature and the policy is
+   *  [[ContentSignaturePolicy.Require]]. `messageId` identifies the affected
+   *  message when one is known at that point.
+   */
+  final case class UnsignedContent(messageId: Option[String] = None)
+      extends OsciError("OSCI content is not signed but the policy requires a content signature")
+
+  /** The author's content signature on received content failed verification.
+   *  Raised regardless of the configured [[ContentSignaturePolicy]] — a
+   *  broken signature is never tolerated.
+   */
+  final case class InvalidContentSignature(
+      messageId: Option[String] = None,
+      cause:     Throwable | Null = null
+  ) extends OsciError("OSCI content signature verification failed", cause)
+
   final case class Certificate(cause: Throwable)
       extends OsciError("Certificate / key error", cause)
 

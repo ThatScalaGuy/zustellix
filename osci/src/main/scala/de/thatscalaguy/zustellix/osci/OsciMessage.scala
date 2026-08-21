@@ -13,11 +13,16 @@ final case class PendingDelivery(
 
 /** A fetched delivery. `reception` is the intermediary's reception entry on
  *  the process card — the acknowledgement mark (see [[OsciMailbox]]).
+ *  `signature` is the verified status of the author's content signature over
+ *  `xml`; it is [[ContentSignatureStatus.Unsigned]] only under
+ *  [[ContentSignaturePolicy.Warn]] — an invalid signature never yields a
+ *  message but raises [[OsciError.InvalidContentSignature]].
  */
 final case class OsciMessage(
     messageId: String,
     subject:   Option[String],
     xml:       String,
     creation:  Option[Instant],
-    reception: Option[Instant]
+    reception: Option[Instant],
+    signature: ContentSignatureStatus
 )

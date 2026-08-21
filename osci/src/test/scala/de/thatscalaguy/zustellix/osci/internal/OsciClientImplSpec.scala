@@ -103,6 +103,49 @@ class OsciClientImplSpec extends CatsEffectSuite {
     }
   }
 
+  test("the content-signature status from the transport lands on the Laufzettel") {
+    val raw = OsciRawResult(
+      "<resp/>", "msg-1", "0800", Nil, Some(ContentSignatureStatus.Unsigned)
+    )
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(raw),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        _    <- impl.request(Ags, "<req/>")
+        seen <- ref.get
+      }
+      yield assertEquals(seen.head.contentSignature, Some(ContentSignatureStatus.Unsigned))
+    }
+  }
+
+  test("request: an UnsignedContent failure records a failure Laufzettel with its messageId") {
+    val err = OsciError.UnsignedContent(Some("msg-u"))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        failingTransport(err),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request(Ags, "<req/>").attempt
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, Left(err))
+        assertEquals(seen.head.messageId, "msg-u")
+        assertEquals(seen.head.status, "UnsignedContent")
+        assertEquals(seen.head.contentSignature, None)
+      }
+    }
+  }
+
   test("request: a 9xxx OsciResponse still raises but records a failure Laufzettel") {
     val err = OsciError.OsciResponse("9000", "boom", Some("msg-9"))
     Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>

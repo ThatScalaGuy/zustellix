@@ -62,10 +62,11 @@ object OsciClient {
         "OsciConfig.certSource is not set — set it, or use the CertManager/CertAlias overload"
       )
     )
-    Resource.eval(certSource).flatMap(internal.OsciBibBridge.resource[F](_, transport)).map {
-      bridge =>
+    Resource.eval(certSource)
+      .flatMap(internal.OsciBibBridge.resource[F](_, transport, config.contentSignatures))
+      .map { bridge =>
         new internal.OsciClientImpl[F](config.tenantId, config.subject, bridge, resolver, sink)
-    }
+      }
   }
 
   /** Build an OSCI/XMeld client whose Originator (Autor) signing + decryption
@@ -96,7 +97,7 @@ object OsciClient {
     val resolver = internal.AgsResolver[F](dvdv, config)
     for {
       cred   <- Resource.eval(certs.resolve(alias))
-      bridge <- internal.OsciBibBridge.resource[F](cred, transport)
+      bridge <- internal.OsciBibBridge.resource[F](cred, transport, config.contentSignatures)
     } yield new internal.OsciClientImpl[F](
       TenantId(alias.value), config.subject, bridge, resolver, sink
     )

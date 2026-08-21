@@ -19,11 +19,15 @@ import scala.concurrent.duration.FiniteDuration
  *  @param readTimeout        HTTP read timeout of the default
  *                            [[OsciHttpTransport]]; ignored when a custom
  *                            transport is passed to `OsciMailbox.resource`
+ *  @param contentSignatures  how strictly the author's content signature on
+ *                            fetched deliveries is enforced (see
+ *                            [[ContentSignaturePolicy]])
  */
 final case class OsciMailboxConfig(
     intermedUri:        URI,
     intermedCipherCert: X509Certificate,
     fetchLimit:         Long = 100,
     connectTimeout:     FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
-    readTimeout:        FiniteDuration = OsciHttpTransport.DefaultReadTimeout
+    readTimeout:        FiniteDuration = OsciHttpTransport.DefaultReadTimeout,
+    contentSignatures:  ContentSignaturePolicy = ContentSignaturePolicy.Warn
 )
