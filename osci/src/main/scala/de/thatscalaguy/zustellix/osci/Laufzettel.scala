@@ -17,9 +17,9 @@ import java.time.Instant
 final case class Laufzettel(
     messageId:    String,
     timestamp:    Instant,
-    recipientAgs: String,
+    recipientAgs: Ags,
     recipientUri: URI,
-    status:       String,
+    status:       LaufzettelStatus,
     rawXml:       Option[String] = None,
     warnings:     List[OsciFeedback] = Nil,
     contentSignature: Option[ContentSignatureStatus] = None

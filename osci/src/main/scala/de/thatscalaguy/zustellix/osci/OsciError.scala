@@ -8,19 +8,29 @@ object OsciError {
   final case class UnknownTenant(id: TenantId)
       extends OsciError(s"Unknown tenant: ${id.value}")
 
-  final case class AgsNotInDvdv(ags: String, serviceUri: String)
+  /** `input` is not a well-formed AGS (exactly 8 digits) — raised by the
+   *  [[Ags]] smart constructors, never by a lookup.
+   */
+  final case class InvalidAgs(input: String)
+      extends OsciError(s"Invalid AGS '$input': expected exactly 8 digits")
+
+  final case class AgsNotInDvdv(ags: Ags, serviceUri: String)
       extends OsciError(
-        s"AGS '$ags' has no service registered for '$serviceUri' in DVDV"
+        s"AGS '${ags.value}' has no service registered for '$serviceUri' in DVDV"
       )
 
-  final case class RecipientCertMissing(ags: String)
+  /** The service description resolved for `ags` carries no cipher
+   *  certificate for the `kind` service element (`OSCI_ADDRESSEE` or
+   *  `OSCI_INTERMEDIARY`).
+   */
+  final case class RecipientCertMissing(ags: Ags, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '$ags' has no cipher certificate"
+        s"DVDV service description for AGS '${ags.value}' has no cipher certificate for '$kind'"
       )
 
-  final case class ServiceElementMissing(ags: String, kind: String)
+  final case class ServiceElementMissing(ags: Ags, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '$ags' is missing service element of type '$kind'"
+        s"DVDV service description for AGS '${ags.value}' is missing service element of type '$kind'"
       )
 
   final case class OsciTransport(cause: Throwable)

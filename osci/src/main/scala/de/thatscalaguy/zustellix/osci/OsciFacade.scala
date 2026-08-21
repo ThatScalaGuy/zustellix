@@ -5,8 +5,8 @@ import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
 
 trait OsciFacade[F[_]] {
-  def request(tenant: TenantId, ags: String, xml: String): F[OsciResponse]
-  def send(tenant: TenantId, ags: String, xml: String): F[OsciReceipt]
+  def request(tenant: TenantId, ags: Ags, xml: String): F[OsciResponse]
+  def send(tenant: TenantId, ags: Ags, xml: String): F[OsciReceipt]
 }
 
 object OsciFacade {

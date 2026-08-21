@@ -13,6 +13,8 @@ import java.util.Base64
 
 class AgsResolverSpec extends CatsEffectSuite {
 
+  private val TestAgs = Ags.unsafe("01001000")
+
   private val Cfg = OsciConfig(
     tenantId   = TenantId("t"),
     certSource = Some(CertSource.Pkcs12(Paths.get("k.p12"), "pw"))
@@ -102,7 +104,7 @@ class AgsResolverSpec extends CatsEffectSuite {
         ))))
       case other => IO.raiseError(new AssertionError(s"unexpected: $other"))
     }
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").map { route =>
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
       assertEquals(route.addresseeUri.toString, "https://recipient/osci")
       assertEquals(route.intermedUri.toString,  "https://intermed/osci")
       assert(route.addresseeCipher != null)
@@ -112,10 +114,11 @@ class AgsResolverSpec extends CatsEffectSuite {
   }
 
   test("resolve raises AgsNotInDvdv when DVDV returns None") {
-    val dvdv = stubDvdv((_, _) => IO.pure(None))
-    AgsResolver[IO](dvdv, Cfg).resolve("nope").attempt.map {
-      case Left(OsciError.AgsNotInDvdv("nope", _)) => ()
-      case other                                        => fail(s"unexpected: $other")
+    val unknown = Ags.unsafe("99999999")
+    val dvdv    = stubDvdv((_, _) => IO.pure(None))
+    AgsResolver[IO](dvdv, Cfg).resolve(unknown).attempt.map {
+      case Left(OsciError.AgsNotInDvdv(ags, _)) => assertEquals(ags, unknown)
+      case other                                     => fail(s"unexpected: $other")
     }
   }
 
@@ -123,9 +126,9 @@ class AgsResolverSpec extends CatsEffectSuite {
     val dvdv = stubDvdv((_, _) => IO.pure(Some(serviceWithElements(List(
       element(ServiceElementType.OSCI_ADDRESSEE, "https://recipient/osci", Some(testCertB64))
     )))))
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").attempt.map {
-      case Left(OsciError.ServiceElementMissing("01001000", "OSCI_INTERMEDIARY")) => ()
-      case other                                                                       => fail(s"unexpected: $other")
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
+      case Left(OsciError.ServiceElementMissing(TestAgs, "OSCI_INTERMEDIARY")) => ()
+      case other                                                                    => fail(s"unexpected: $other")
     }
   }
 
@@ -134,9 +137,10 @@ class AgsResolverSpec extends CatsEffectSuite {
       element(ServiceElementType.OSCI_ADDRESSEE,    "https://recipient/osci", None),
       element(ServiceElementType.OSCI_INTERMEDIARY, "https://intermed/osci",  Some(testCertB64))
     )))))
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").attempt.map {
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
-        assert(e.ags.startsWith("01001000"))
+        assertEquals(e.ags, TestAgs)
+        assertEquals(e.kind, "OSCI_ADDRESSEE")
       case other => fail(s"unexpected: $other")
     }
   }
@@ -147,7 +151,7 @@ class AgsResolverSpec extends CatsEffectSuite {
       element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
       element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
     )))))
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").map { route =>
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
       assert(route.addresseeCipher.getEncoded.sameElements(certBytes(testCertB64)),
              "addressee cipher must be the inline cert, not the foreign standalone one")
     }
@@ -159,7 +163,7 @@ class AgsResolverSpec extends CatsEffectSuite {
       element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
       element(ServiceElementType.CIPHER_CERTIFICATE, "https://addr/cipher",    Some(otherCertB64), name = Some("addr"))
     )))))
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").map { route =>
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).map { route =>
       assert(route.addresseeCipher.getEncoded.sameElements(certBytes(otherCertB64)),
              "addressee cipher must be the matching standalone cert")
     }
@@ -171,9 +175,10 @@ class AgsResolverSpec extends CatsEffectSuite {
       element(ServiceElementType.OSCI_INTERMEDIARY,  "https://intermed/osci",  Some(testCertB64),  name = Some("intm")),
       element(ServiceElementType.CIPHER_CERTIFICATE, "https://other/cipher",   Some(otherCertB64), name = Some("intm"))
     )))))
-    AgsResolver[IO](dvdv, Cfg).resolve("01001000").attempt.map {
+    AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
-        assert(e.ags.startsWith("01001000"))
+        assertEquals(e.ags, TestAgs)
+        assertEquals(e.kind, "OSCI_ADDRESSEE")
       case other => fail(s"unexpected: $other")
     }
   }

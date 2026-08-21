@@ -4,7 +4,7 @@ import cats.effect.Sync
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
 import de.thatscalaguy.zustellix.dvdv.model.{Certificate as DvdvCert, ServiceElementInfo, ServiceElementType}
-import de.thatscalaguy.zustellix.osci.{OsciConfig, OsciError}
+import de.thatscalaguy.zustellix.osci.{Ags, OsciConfig, OsciError}
 
 import java.io.ByteArrayInputStream
 import java.net.URI
@@ -12,7 +12,7 @@ import java.security.cert.{CertificateFactory, X509Certificate}
 import java.util.Base64
 
 trait AgsResolver[F[_]] {
-  def resolve(ags: String): F[OsciRoute]
+  def resolve(ags: Ags): F[OsciRoute]
 }
 
 object AgsResolver {
@@ -20,8 +20,8 @@ object AgsResolver {
   def apply[F[_]: Sync](dvdv: DvdvClient[F], config: OsciConfig): AgsResolver[F] =
     new AgsResolver[F] {
 
-      def resolve(ags: String): F[OsciRoute] = {
-        val orgKey = s"ags:$ags"
+      def resolve(ags: Ags): F[OsciRoute] = {
+        val orgKey = s"ags:${ags.value}"
         dvdv.findServiceDescription(orgKey, config.serviceUri).flatMap {
           case None =>
             Sync[F].raiseError(OsciError.AgsNotInDvdv(ags, config.serviceUri))
@@ -30,7 +30,7 @@ object AgsResolver {
         }
       }
 
-      private def buildRoute(ags: String, elems: List[ServiceElementInfo]): F[OsciRoute] = {
+      private def buildRoute(ags: Ags, elems: List[ServiceElementInfo]): F[OsciRoute] = {
         def find(t: ServiceElementType): F[ServiceElementInfo] =
           elems.find(_.serviceElementType.contains(t)) match {
             case Some(e) => Sync[F].pure(e)
@@ -65,14 +65,14 @@ object AgsResolver {
         yield OsciRoute(addrUri, addrCipher, addrSig, intUri, intCipher)
       }
 
-      private def requireCipher(ags: String, kind: String, e: ServiceElementInfo): F[X509Certificate] =
+      private def requireCipher(ags: Ags, kind: String, e: ServiceElementInfo): F[X509Certificate] =
         requireCipherCert(ags, kind, e.cipherCertificate)
 
-      private def requireCipherCert(ags: String, kind: String, c: Option[DvdvCert]): F[X509Certificate] =
+      private def requireCipherCert(ags: Ags, kind: String, c: Option[DvdvCert]): F[X509Certificate] =
         c match {
           case Some(cert) => decodeCert(cert).adaptError(t => OsciError.Certificate(t))
           case None       => Sync[F].raiseError[X509Certificate](
-                               OsciError.RecipientCertMissing(s"$ags ($kind)")
+                               OsciError.RecipientCertMissing(ags, kind)
                              )
         }
 
