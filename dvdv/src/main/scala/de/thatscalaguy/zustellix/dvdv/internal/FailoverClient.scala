@@ -11,7 +11,13 @@ import scala.concurrent.duration.FiniteDuration
 
 /** Sticky multi-server failover middleware, mirroring the DVDV2 reference
  *  (`DVDV2RestManager`). `servers` index 0 is the primary; the rest are
- *  failover targets tried in order.
+ *  failover targets tried in order. Each entry is a per-server base URI that
+ *  may carry its own path prefix (operators serve behind different prefixes,
+ *  e.g. `https://backup/dvdv2-backend`): a request addressed under one
+ *  server's base has that base's path stripped and the target server's path
+ *  prepended when it is routed, so paths survive failover and recovery.
+ *  Requests not addressed under any configured base are routed with their
+ *  path unchanged.
  *
  *  Failover triggers on a response status `>= 500` or a connection/transport
  *  exception from the underlying client. A 2xx/3xx/4xx (including 401/404) is a
@@ -28,9 +34,9 @@ object FailoverClient {
   /** The failover middleware plus a view of its routing state.
    *
    *  `activeServer` is the sticky active server new requests are routed to
-   *  first (index 0 = the primary). It lets callers derive per-server values —
-   *  e.g. the token endpoint a POST will be addressed at — that follow
-   *  failover and recovery.
+   *  first (index 0 = the primary), as its base URI including any path prefix.
+   *  It lets callers derive per-server values — e.g. the token endpoint a POST
+   *  will be addressed at — that follow failover and recovery.
    */
   final case class Handle[F[_]](
       middleware: Client[F] => Client[F],
@@ -66,6 +72,17 @@ object FailoverClient {
     val noOfServers = serverList.size
 
     Client[F] { req =>
+      // The base path the request was addressed under: the longest path-prefix
+      // match among the configured servers. All servers are candidates, not
+      // just the primary — token POSTs are addressed at the ACTIVE server's
+      // base, so after a failover a recovery attempt must strip the backup's
+      // prefix. Requests addressed at no configured server strip nothing.
+      val sourceBase: Uri.Path = serverList
+        .filter(s => s.scheme == req.uri.scheme && s.authority == req.uri.authority && req.uri.path.startsWith(s.path))
+        .map(_.path)
+        .maxByOption(_.segments.size)
+        .getOrElse(Uri.Path.empty)
+
       Resource.suspend {
         Clock[F].realTime.flatMap { now =>
           // Decide once per request whether recovery is due, advancing the
@@ -80,7 +97,7 @@ object FailoverClient {
             def go(i: Int): F[Resource[F, Response[F]]] = {
               val serverIndex = pickServerIndex(i, activeIndex, attemptRecover)
               val srv         = serverList(serverIndex)
-              val routed      = req.withUri(req.uri.copy(scheme = srv.scheme, authority = srv.authority))
+              val routed      = req.withUri(rebase(req.uri, sourceBase, srv))
               val isLast      = i == noOfServers - 1
 
               underlying.run(routed).allocated.attempt.flatMap {
@@ -103,6 +120,25 @@ object FailoverClient {
         }
       }
     }
+  }
+
+  /** Re-address `reqUri` at the `target` server: swap in the target's scheme
+   *  and authority, strip the base path the request was addressed under
+   *  (`sourceBase`) and prepend the target's own path prefix. Query and
+   *  fragment ride along untouched.
+   */
+  private def rebase(reqUri: Uri, sourceBase: Uri.Path, target: Uri): Uri = {
+    val rel  = reqUri.path.segments.drop(sourceBase.segments.size)
+    val segs = target.path.segments ++ rel
+    val newPath =
+      if (segs.isEmpty && reqUri.path.isEmpty) reqUri.path
+      else
+        Uri.Path(
+          segs,
+          absolute = true,
+          endsWithSlash = if (rel.nonEmpty) reqUri.path.endsWithSlash else target.path.endsWithSlash
+        )
+    reqUri.copy(scheme = target.scheme, authority = target.authority, path = newPath)
   }
 
   /** A server answered. If it is the primary, reset to it and clear the recover

@@ -89,6 +89,51 @@ class DvdvClientSpec extends CatsEffectSuite {
     )
   }
 
+  test("failover to a backup behind a path prefix rebases directory and token requests") {
+    for {
+      bytes <- IO.blocking(java.nio.file.Files.readAllBytes(resourcePath("test-cert.p12")))
+      hits  <- Ref.of[IO, List[(String, String)]](Nil)
+      backend = HttpApp[IO] { req =>
+                  val host = req.uri.authority.map(_.host.value).getOrElse("?")
+                  hits.update(_ :+ (host -> req.uri.path.renderString)) *> {
+                    if (host == "primary") IO(Response[IO](Status.ServiceUnavailable))
+                    else
+                      (req.method, req.uri.path.renderString) match {
+                        case (Method.POST, "/dvdv2-backend/extern/standaloneauth/token") =>
+                          Ok(Json.obj(
+                            "access_token" -> Json.fromString("tok"),
+                            "expires_in"   -> Json.fromLong(300L),
+                            "token_type"   -> Json.fromString("Bearer")
+                          ))
+                        case (Method.GET, "/dvdv2-backend/extern/standaloneauth/directory/v2/version") =>
+                          Ok(Json.fromString("v1"))
+                        case _ => NotFound()
+                      }
+                  }
+                }
+      cfg = DvdvConfig(
+              baseUri         = uri"http://primary",
+              certSource      = Some(CertSource.Pkcs12Bytes(bytes, "test")),
+              failoverServers = List(uri"http://backup/dvdv2-backend"),
+              cacheConfig     = CacheConfig.disabled
+            )
+      v  <- DvdvClient.fromClient[IO](cfg, Client.fromHttpApp(backend)).use(_.serviceVersion)
+      hs <- hits.get
+    } yield {
+      assertEquals(v.raw, Some("v1"))
+      assertEquals(
+        hs,
+        List(
+          // token POST addressed at the then-active primary, failed over and re-based
+          "primary" -> "/extern/standaloneauth/token",
+          "backup"  -> "/dvdv2-backend/extern/standaloneauth/token",
+          // directory GET routed straight to the sticky backup, prefix prepended
+          "backup"  -> "/dvdv2-backend/extern/standaloneauth/directory/v2/version"
+        )
+      )
+    }
+  }
+
   test("fromClient with a CertManager fails fast on an unknown alias") {
     for {
       certs <- InMemoryCertManager.make[IO](Map.empty[CertAlias, CertCredential])

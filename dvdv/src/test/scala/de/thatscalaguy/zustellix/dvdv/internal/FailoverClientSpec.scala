@@ -28,6 +28,13 @@ class FailoverClientSpec extends CatsEffectSuite {
       hits.update(_ :+ host) *> behavior(host)
     })
 
+  /** Like [[routed]], but records every full URI it serves, keyed by host. */
+  private def routedUris(hits: Ref[IO, List[(String, String)]])(behavior: String => IO[Response[IO]]): Client[IO] =
+    Client.fromHttpApp(HttpApp[IO] { req =>
+      val host = hostOf(req)
+      hits.update(_ :+ (host -> req.uri.renderString)) *> behavior(host)
+    })
+
   private def make(servers: NonEmptyList[Uri], recoverAfter: FiniteDuration = 180.seconds)(
       underlying: Client[IO]
   ): IO[Client[IO]] =
@@ -176,6 +183,69 @@ class FailoverClientSpec extends CatsEffectSuite {
       assertEquals(a0, primary)
       assertEquals(a1, secondary)
       assertEquals(a2, primary)
+    }
+  }
+
+  test("failover to a server with a path prefix prepends the prefix") {
+    val hits = Ref.unsafe[IO, List[(String, String)]](Nil)
+    val backend = routedUris(hits) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c  <- make(NonEmptyList(primary, List(uri"http://secondary/dvdv2-backend")))(backend)
+      st <- c.status(Request[IO](Method.GET, uri"http://primary/extern/standaloneauth/directory/v2/version?request_json=x"))
+      hs <- hits.get
+    } yield {
+      assertEquals(st, Status.Ok)
+      assertEquals(
+        hs,
+        List(
+          "primary"   -> "http://primary/extern/standaloneauth/directory/v2/version?request_json=x",
+          "secondary" -> "http://secondary/dvdv2-backend/extern/standaloneauth/directory/v2/version?request_json=x"
+        )
+      )
+    }
+  }
+
+  test("primary base path is stripped when failing over to a server without one") {
+    val hits = Ref.unsafe[IO, List[(String, String)]](Nil)
+    val backend = routedUris(hits) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c  <- make(NonEmptyList(uri"http://primary/api", List(secondary)))(backend)
+      st <- c.status(Request[IO](Method.GET, uri"http://primary/api/v2/version"))
+      hs <- hits.get
+    } yield {
+      assertEquals(st, Status.Ok)
+      assertEquals(
+        hs,
+        List("primary" -> "http://primary/api/v2/version", "secondary" -> "http://secondary/v2/version")
+      )
+    }
+  }
+
+  test("recovery attempt rebases a request addressed at the failed-over server") {
+    val hits        = Ref.unsafe[IO, List[(String, String)]](Nil)
+    val primaryDown = Ref.unsafe[IO, Boolean](true)
+    val backend = routedUris(hits) {
+      case "primary" => primaryDown.get.map(d => Response[IO](if (d) Status.InternalServerError else Status.Ok))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c  <- make(NonEmptyList(uri"http://primary/p", List(uri"http://secondary/s")), recoverAfter = 50.millis)(backend)
+      _  <- c.status(Request[IO](Method.POST, uri"http://primary/p/token")) // fail over to secondary
+      h1 <- hits.get
+      _  <- primaryDown.set(false) // primary healthy again
+      _  <- IO.sleep(80.millis)    // recover window elapses
+      _  <- hits.set(Nil)
+      _  <- c.status(Request[IO](Method.POST, uri"http://secondary/s/token")) // addressed at the active server
+      h2 <- hits.get
+    } yield {
+      assertEquals(h1, List("primary" -> "http://primary/p/token", "secondary" -> "http://secondary/s/token"))
+      assertEquals(h2, List("primary" -> "http://primary/p/token")) // recovery attempt re-based onto the primary
     }
   }
 
