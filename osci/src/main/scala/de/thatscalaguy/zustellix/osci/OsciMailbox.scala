@@ -23,13 +23,17 @@ trait OsciMailbox[F[_]] {
 
   /** Deliveries addressed to this mailbox that nobody has fetched yet
    *  (`FetchProcessCard` with `selectNoReceptionOnly`), oldest first, at most
-   *  `fetchLimit` entries.
+   *  `fetchLimit` entries. The page carries the response's `3xxx` warnings;
+   *  [[PendingPage.truncated]] tells whether the listing was cut off at
+   *  `fetchLimit` (feedback code `3800` / `3801`) — more deliveries are then
+   *  waiting than the page lists.
    */
-  def pending: F[List[PendingDelivery]]
+  def pending: F[PendingPage]
 
   /** Fetches one delivery by message id (`FetchDelivery`) and decrypts its
    *  content with our own cipher cert. Raises [[OsciError.NoSuchMessage]]
-   *  when the response carries no content for the id.
+   *  when the response carries no content for the id. `3xxx` warnings on the
+   *  response are surfaced via [[OsciMessage.warnings]].
    */
   def fetch(messageId: String): F[OsciMessage]
 }

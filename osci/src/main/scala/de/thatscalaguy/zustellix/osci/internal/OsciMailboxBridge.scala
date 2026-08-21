@@ -6,7 +6,8 @@ import de.thatscalaguy.zustellix.osci.{
   OsciMailbox,
   OsciMailboxConfig,
   OsciMessage,
-  PendingDelivery
+  PendingDelivery,
+  PendingPage
 }
 
 import de.osci.osci12.common.DialogHandler
@@ -32,7 +33,7 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
 
   import OsciBibSupport.*
 
-  def pending: F[List[PendingDelivery]] =
+  def pending: F[PendingPage] =
     Sync[F].blocking {
       try withDialog { dialog =>
         val fpc = new FetchProcessCard(dialog)
@@ -43,13 +44,15 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
         val rsp = fpc.send()
         checkFeedback(rsp.getFeedback)
 
-        Option(rsp.getProcessCardBundles).map(_.toList).getOrElse(Nil).map { pc =>
-          PendingDelivery(
-            messageId = pc.getMessageId,
-            subject   = Option(pc.getSubject),
-            creation  = parseTimestamp(pc.getCreation)
-          )
-        }
+        val deliveries =
+          Option(rsp.getProcessCardBundles).map(_.toList).getOrElse(Nil).map { pc =>
+            PendingDelivery(
+              messageId = pc.getMessageId,
+              subject   = Option(pc.getSubject),
+              creation  = parseTimestamp(pc.getCreation)
+            )
+          }
+        PendingPage(deliveries, feedbackWarnings(rsp.getFeedback))
       }
       catch {
         case e: Exception => throw toOsciError(e)
@@ -80,7 +83,8 @@ private[osci] final class OsciMailboxBridgeImpl[F[_]: Sync](
           xml       = xml,
           creation  = parseTimestamp(rsp.getTimestampCreation),
           reception = Option(rsp.getProcessCardBundle).flatMap(pc => parseTimestamp(pc.getReception)),
-          signature = signature
+          signature = signature,
+          warnings  = feedbackWarnings(rsp.getFeedback)
         )
       }
       catch {
