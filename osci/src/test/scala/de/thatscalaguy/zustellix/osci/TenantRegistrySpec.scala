@@ -6,9 +6,9 @@ import munit.CatsEffectSuite
 class TenantRegistrySpec extends CatsEffectSuite {
 
   private def fakeClient(tag: String): OsciClient[IO] = new OsciClient[IO] {
-    def request(ags: String, xml: String): IO[OsciResponse] =
-      IO.pure(OsciResponse(Some(s"$tag:$ags"), s"$tag-msg", "0800"))
-    def send(ags: String, xml: String): IO[OsciReceipt] =
+    def request(ags: Ags, xml: String): IO[OsciResponse] =
+      IO.pure(OsciResponse(Some(s"$tag:${ags.value}"), s"$tag-msg", "0800"))
+    def send(ags: Ags, xml: String): IO[OsciReceipt] =
       IO.pure(OsciReceipt(s"$tag-msg", "0800", None))
   }
 
@@ -16,9 +16,9 @@ class TenantRegistrySpec extends CatsEffectSuite {
     val alice = fakeClient("alice")
     val reg   = TenantRegistry.inMemory[IO](Map(TenantId("alice") -> alice))
     reg.lookup(TenantId("alice"))
-      .flatMap(_.request("01", "x"))
+      .flatMap(_.request(Ags.unsafe("01001000"), "x"))
       .map(_.xml)
-      .assertEquals(Some("alice:01"))
+      .assertEquals(Some("alice:01001000"))
   }
 
   test("inMemory.lookup raises UnknownTenant on miss") {

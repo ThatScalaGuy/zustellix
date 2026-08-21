@@ -102,7 +102,7 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   inspecting `warnings`; a remaining `OsciResponse` is a real `9xxx`
 >   failure. `Laufzettel.status` can now carry a `3xxx` code, so
 >   "starts with `0` = success" checks must accept `0xxx` **and** `3xxx`
->   as delivered.
+>   as delivered — `LaufzettelStatus.delivered` does exactly that.
 > - All feedback rows are scanned now: a `9xxx` error behind a per-language
 >   duplicate row raises where it previously slipped through, and the
 >   mailbox's `pending` / `fetch` no longer abort on `3800` / `3801`
@@ -125,6 +125,20 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   delivered message must check `status`: `0xxx` / `3xxx` is delivered,
 >   anything else (a `9xxx` code or an error kind like `OsciTransport`) is a
 >   failure record with `rawXml = None`.
+> - The AGS is now the opaque type `Ags` instead of a plain `String` — in
+>   `OsciClient.request` / `send`, `OsciFacade.request` / `send`,
+>   `Laufzettel.recipientAgs` and the `ags` field of `AgsNotInDvdv`,
+>   `RecipientCertMissing` and `ServiceElementMissing`. Build one with
+>   `Ags.from(s)` (`Either[OsciError.InvalidAgs, Ags]`, exactly 8 digits) or
+>   `Ags.unsafe(s)` (throws); read the raw string back with `.value`.
+> - `OsciError.RecipientCertMissing` gained a `kind` field naming the
+>   affected service element (`OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY`) — it
+>   was previously appended to the `ags` string.
+> - `Laufzettel.status` is now a `LaufzettelStatus` instead of a `String`:
+>   `Feedback(code)` carries an OSCI feedback code, `Failed(kind)` an error
+>   kind when no code exists. `status.delivered` replaces "starts with `0`
+>   or `3`" checks, and `status.render` yields the previous plain string for
+>   logs and DB columns.
 
 ---
 
@@ -427,6 +441,12 @@ one:
 | `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
 | `OsciMailbox.pending` / `fetch`| `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie) |
 
+Recipients are addressed by their `Ags` (amtlicher Gemeindeschlüssel) — an
+opaque type that only admits well-formed keys: `Ags.from("01001000")`
+validates (exactly 8 digits, `Either[OsciError.InvalidAgs, Ags]`),
+`Ags.unsafe(...)` throws on bad input, `.value` reads the raw string back.
+A typo fails at the call site instead of surfacing as a DVDV miss.
+
 Every outbound operation:
 
 1. calls `dvdv.findServiceDescription("ags:<ags>", serviceUri)` **once** per
@@ -473,7 +493,7 @@ object SendDemo extends IOApp.Simple:
       dvdv <- DvdvClient.resource[IO](dvdvConfig)
       osci <- OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO])
     yield osci).use { osci =>
-      osci.request(ags = "01001000", xml = "<xmeld>...</xmeld>").flatMap { rsp =>
+      osci.request(ags = Ags.unsafe("01001000"), xml = "<xmeld>...</xmeld>").flatMap { rsp =>
         IO.println(s"[${rsp.status}] ${rsp.xml.getOrElse("<no content>")}")
       }
     }
@@ -508,7 +528,7 @@ val xfamConfig = OsciConfig(
 )
 
 OsciClient.resource[IO](xfamConfig, dvdv, LaufzettelSink.console[IO]).use { osci =>
-  osci.send(ags = "01001000", xml = "<xfamilie>...</xfamilie>").flatMap { receipt =>
+  osci.send(ags = Ags.unsafe("01001000"), xml = "<xfamilie>...</xfamilie>").flatMap { receipt =>
     IO.println(s"stored as ${receipt.messageId} (status ${receipt.status})")
   }
 }
@@ -677,7 +697,7 @@ val srcFromFile = ConfigSource.file[IO](Paths.get("/etc/zustellix/tenants.proper
 def dvdvFor(t: TenantId): DvdvClient[IO] = clientsByTenant(t)   // caller owns these
 
 OsciFacade.fromConfigs[IO](src, dvdvFor, LaufzettelSink.console[IO]).use { facade =>
-  facade.request(TenantId("kiel"), ags = "01002000", xml = "<xmeld>...</xmeld>")
+  facade.request(TenantId("kiel"), ags = Ags.unsafe("01002000"), xml = "<xmeld>...</xmeld>")
 }
 ```
 
@@ -722,7 +742,7 @@ val alias = CertAlias("flensburg")
 (for
   dvdv <- DvdvClient.resource[IO](dvdvConfig, certManager, alias)
   osci <- OsciClient.resource[IO](osciConfig, certManager, alias, dvdv, LaufzettelSink.console[IO])
-yield osci).use(_.request("01001000", "<xmeld>...</xmeld>"))
+yield osci).use(_.request(Ags.unsafe("01001000"), "<xmeld>...</xmeld>"))
 
 // the mailbox takes the same alias:
 OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
@@ -743,6 +763,12 @@ val toDb: LaufzettelSink[IO] = new LaufzettelSink[IO]:
   def record(tenant: TenantId, l: Laufzettel): IO[Unit] = repo.insert(tenant, l)
 ```
 
+`status` is a `LaufzettelStatus`: `Feedback(code)` when OSCI reported a
+feedback code (`0xxx` / `3xxx` / `9xxx`), `Failed(kind)` when the delivery
+failed before one existed. `status.delivered` is `true` for `0xxx` / `3xxx`
+(the request was executed), and `status.render` gives the plain string —
+the code or the error kind — for logs and DB columns.
+
 **`rawXml` is `None` by default.** The decrypted response XML of a `request`
 (e.g. an XMeld Personensuche answer) contains personal data, and whatever
 the sink writes to — a DB, a queue, a log shipper — would persist it with
@@ -760,9 +786,9 @@ of a `request` response is verified independently of capture —
 Failed deliveries are recorded too, so the sink sees the complete audit
 trail, not just successes. For a failure Laufzettel:
 
-- `status` is the OSCI feedback code for a `9xxx` response
-  (`OsciError.OsciResponse`) and the error kind otherwise (e.g.
-  `OsciTransport`, `AgsNotInDvdv`);
+- `status` is `Feedback` with the `9xxx` code for an OSCI error response
+  (`OsciError.OsciResponse`) and `Failed` with the error kind otherwise
+  (e.g. `OsciTransport`, `AgsNotInDvdv`);
 - `messageId` is the id issued by `GetMessageId` when the delivery got that
   far, `""` otherwise;
 - `rawXml` is `None`, `warnings` is `Nil`;
@@ -779,8 +805,9 @@ All failures are an `OsciError` (a `RuntimeException`):
 | Error                  | When |
 |------------------------|------|
 | `UnknownTenant`        | facade dispatched to a tenant with no registered client |
+| `InvalidAgs`           | the given string is not a well-formed 8-digit AGS (raised by the `Ags` smart constructors) |
 | `AgsNotInDvdv`         | DVDV has no service registered for the AGS + service URI |
-| `RecipientCertMissing` | the service description has no cipher certificate |
+| `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code; carries the `messageId` when one was already issued |

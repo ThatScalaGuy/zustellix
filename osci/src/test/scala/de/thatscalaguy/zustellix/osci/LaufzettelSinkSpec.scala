@@ -11,9 +11,9 @@ class LaufzettelSinkSpec extends CatsEffectSuite {
   private val sampleLz = Laufzettel(
     messageId    = "msg-1",
     timestamp    = Instant.parse("2026-05-13T12:00:00Z"),
-    recipientAgs = "01001000",
+    recipientAgs = Ags.unsafe("01001000"),
     recipientUri = URI.create("https://example/osci"),
-    status       = "OK",
+    status       = LaufzettelStatus.Feedback("0800"),
     rawXml       = Some("<x/>")
   )
 

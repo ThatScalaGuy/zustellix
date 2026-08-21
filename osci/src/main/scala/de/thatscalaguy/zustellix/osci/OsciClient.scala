@@ -15,13 +15,13 @@ trait OsciClient[F[_]] {
    *  had no extractable content) together with the intermediary's
    *  `messageId`, `status` and `3xxx` warnings.
    */
-  def request(ags: String, xml: String): F[OsciResponse]
+  def request(ags: Ags, xml: String): F[OsciResponse]
 
   /** Asynchronous send (`StoreDelivery`): stores the message in the
    *  recipient's mailbox at their intermediary and returns a receipt; the
    *  recipient fetches it later. Used by profiles like XFamilie.
    */
-  def send(ags: String, xml: String): F[OsciReceipt]
+  def send(ags: Ags, xml: String): F[OsciReceipt]
 }
 
 object OsciClient {
