@@ -145,11 +145,12 @@ class FailoverClientSpec extends CatsEffectSuite {
     val backend = routed(hits)(_ => IO(Response[IO](Status.ServiceUnavailable).withEntity("boom")))
     for {
       c   <- make(NonEmptyList(primary, List(secondary)))(backend)
-      err <- c.run(req).use(ResponseDecoder.required[IO, String](_)).attempt
+      err <- c.run(req).use(ResponseDecoder.required[IO, String]("test", _)).attempt
     } yield err match {
-      case Left(DvdvError.ServerError(status, body)) =>
+      case Left(DvdvError.ServerError(status, body, problem)) =>
         assertEquals(status, 503)
         assertEquals(body, "boom")
+        assertEquals(problem, None)
       case other => fail(s"expected ServerError, got $other")
     }
   }

@@ -13,6 +13,7 @@ import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
 
 import java.nio.file.Paths
+import java.time.Instant
 
 class RevocationSpec extends CatsEffectSuite {
 
@@ -45,9 +46,27 @@ class RevocationSpec extends CatsEffectSuite {
   test("findCertificateByFingerprint raises CertificateRevoked for a revoked cert") {
     val c = client(routesReturning(revokedCert), config())
     c.findCertificateByFingerprint(TestFp).attempt.map {
-      case Left(DvdvError.CertificateRevoked(date, reason)) =>
-        assertEquals(date, Some("2026-01-01T00:00:00Z"))
+      case Left(DvdvError.CertificateRevoked(date, rawDate, reason)) =>
+        assertEquals(date, Some(Instant.parse("2026-01-01T00:00:00Z")))
+        assertEquals(rawDate, Some("2026-01-01T00:00:00Z"))
         assertEquals(reason, Some(RevocationReason.KEY_COMPROMISE))
+      case other =>
+        fail(s"expected CertificateRevoked, got $other")
+    }
+  }
+
+  test("CertificateRevoked keeps an unparseable revocation date as rawDate") {
+    val cert = Certificate(
+      fingerprint      = Some("deadbeef"),
+      revocationDate   = Some("not-a-date"),
+      revocationReason = Some(RevocationReason.UNSPECIFIED)
+    )
+    val c = client(routesReturning(cert), config())
+    c.findCertificateByFingerprint(TestFp).attempt.map {
+      case Left(DvdvError.CertificateRevoked(date, rawDate, reason)) =>
+        assertEquals(date, None)
+        assertEquals(rawDate, Some("not-a-date"))
+        assertEquals(reason, Some(RevocationReason.UNSPECIFIED))
       case other =>
         fail(s"expected CertificateRevoked, got $other")
     }

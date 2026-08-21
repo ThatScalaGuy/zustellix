@@ -106,7 +106,7 @@ object TokenManager {
                      case Status.Ok =>
                        resp.bodyText.compile.string.flatMap { body =>
                          Async[F].fromEither(
-                           decode[AccessTokenResponse](body).left.map(e => DvdvError.TransportError(e))
+                           decode[AccessTokenResponse](body).left.map(e => DvdvError.DecodingError("token", e))
                          )
                        }
                      case Status.Unauthorized =>
@@ -116,9 +116,10 @@ object TokenManager {
                        }
                      case other =>
                        resp.bodyText.compile.string.flatMap { body =>
+                         val problemOpt = decode[Problem](body).toOption
                          val err =
-                           if (other.code >= 500) DvdvError.ServerError(other.code, body)
-                           else DvdvError.Unexpected(other.code, body)
+                           if (other.code >= 500) DvdvError.ServerError(other.code, body, problemOpt)
+                           else DvdvError.Unexpected(other.code, body, problemOpt)
                          Async[F].raiseError[AccessTokenResponse](err)
                        }
                    }

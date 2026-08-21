@@ -21,43 +21,43 @@ final class HttpDvdvClient[F[_]: Concurrent](
   // --- 3 plain GETs ---
   def categories: F[List[DirectoryOrganizationCategoryLevel1DTO]] =
     http.run(HttpRequest[F](Method.GET, endpoint(base, "categories")))
-      .use(ResponseDecoder.required[F, List[DirectoryOrganizationCategoryLevel1DTO]](_))
+      .use(ResponseDecoder.required[F, List[DirectoryOrganizationCategoryLevel1DTO]]("categories", _))
 
   def intermediaries: F[List[SummaryServiceElementDTO]] =
     http.run(HttpRequest[F](Method.GET, endpoint(base, "intermediaries")))
-      .use(ResponseDecoder.required[F, List[SummaryServiceElementDTO]](_))
+      .use(ResponseDecoder.required[F, List[SummaryServiceElementDTO]]("intermediaries", _))
 
   def serviceVersion: F[ServiceVersion] =
     http.run(HttpRequest[F](Method.GET, endpoint(base, "version")))
-      .use(ResponseDecoder.required[F, ServiceVersion](_))
+      .use(ResponseDecoder.required[F, ServiceVersion]("version", _))
 
   // --- 8 query-style GETs ---
   def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]] = {
     val uri = withRequestJson(base, "findauthoritydescription",
       jsonObject("category" -> category.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, OrganizationDescription](_))
+      .use(ResponseDecoder.optional[F, OrganizationDescription]("findauthoritydescription", _))
   }
 
   def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]] = {
     val uri = withRequestJson(base, "findauthoritydescriptions",
       jsonObject("organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[OrganizationDescription]](_))
+      .use(ResponseDecoder.required[F, List[OrganizationDescription]]("findauthoritydescriptions", _))
   }
 
   def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]] = {
     val uri = withRequestJson(base, "findcategories",
       jsonObject("fingerPrint" -> fingerPrint.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[String]](_))
+      .use(ResponseDecoder.required[F, List[String]]("findcategories", _))
   }
 
   def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]] = {
     val uri = withRequestJson(base, "findCertificateByFingerprint",
       jsonObject("fingerPrint" -> fingerPrint.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Certificate](_))
+      .use(ResponseDecoder.optional[F, Certificate]("findCertificateByFingerprint", _))
       .flatTap(_.traverse_(Revocation.check[F](_, config.ignoreRevocation)))
   }
 
@@ -73,7 +73,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "parameterValue"     -> parameterValue
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[LightweightOrganization]](_))
+      .use(ResponseDecoder.required[F, List[LightweightOrganization]]("findOrganizationsByServiceElement", _))
   }
 
   def findOrganizationsByServiceElement(
@@ -88,7 +88,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "parameterValue"           -> parameterValue
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[LightweightOrganization]](_))
+      .use(ResponseDecoder.required[F, List[LightweightOrganization]]("findOrganizationsByServiceElement", _))
   }
 
   def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]] = {
@@ -98,21 +98,21 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "serviceSpecificationUri" -> serviceSpecificationUri
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Service](_))
+      .use(ResponseDecoder.optional[F, Service]("findservicedescription", _))
   }
 
   def findServiceSpecificationUrisByCategory(category: Category): F[List[String]] = {
     val uri = withRequestJson(base, "findServiceSpecificationUrisByCategory",
       jsonObject("category" -> category.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, List[String]](_))
+      .use(ResponseDecoder.required[F, List[String]]("findServiceSpecificationUrisByCategory", _))
   }
 
   def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult] = {
     val uri = withRequestJson(base, "verifycategory",
       jsonObject("fingerPrint" -> fingerPrint.value, "category" -> category.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.required[F, VerificationResult](_))
+      .use(ResponseDecoder.required[F, VerificationResult]("verifycategory", _))
   }
 
   // --- 6 batch POSTs ---
@@ -140,7 +140,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
     else {
       val uri = base / "batch" / name
       val req = HttpRequest[F](Method.POST, uri).withEntity(requests.asJson)
-      http.run(req).use(ResponseDecoder.required[F, List[B]](_)).flatMap { results =>
+      http.run(req).use(ResponseDecoder.required[F, List[B]](s"batch/$name", _)).flatMap { results =>
         if (results.sizeIs == requests.size) Concurrent[F].pure(results)
         else Concurrent[F].raiseError(DvdvError.BatchSizeMismatch(requests.size, results.size))
       }

@@ -3,6 +3,8 @@ package de.thatscalaguy.zustellix.dvdv
 import de.thatscalaguy.zustellix.dvdv.model.Problem
 import de.thatscalaguy.zustellix.dvdv.model.RevocationReason
 
+import java.time.Instant
+
 sealed abstract class DvdvError(msg: String, cause: Throwable | Null = null) extends RuntimeException(msg, cause)
 
 object DvdvError {
@@ -17,14 +19,34 @@ object DvdvError {
   final case class NotFound(problem: Problem)
       extends DvdvError(s"404 Not Found: ${problem.detail.orElse(problem.title).getOrElse("")}")
 
-  final case class Unexpected(status: Int, body: String)
+  /** A non-2xx status outside the mapped 400/401/404/5xx cases. `problem` is
+   *  `Some` only when the body parsed as an RFC 7807 Problem; the raw body is
+   *  always kept.
+   */
+  final case class Unexpected(status: Int, body: String, problem: Option[Problem])
       extends DvdvError(s"Unexpected $status: $body")
 
-  final case class ServerError(status: Int, body: String)
+  /** A 5xx response. `problem` is `Some` only when the body parsed as an
+   *  RFC 7807 Problem; the raw body is always kept.
+   */
+  final case class ServerError(status: Int, body: String, problem: Option[Problem])
       extends DvdvError(s"Server error $status: $body")
 
-  final case class CertificateRevoked(date: Option[String], reason: Option[RevocationReason])
-      extends DvdvError(s"Certificate revoked${date.fold("")(d => s" since $d")}${reason.fold("")(r => s": $r")}")
+  /** `rawDate` is the wire string verbatim; `date` is its parsed `Instant`,
+   *  `None` when the date is absent or unparseable — construction never
+   *  throws on a malformed revocation date.
+   */
+  final case class CertificateRevoked(date: Option[Instant], rawDate: Option[String], reason: Option[RevocationReason])
+      extends DvdvError(
+        s"Certificate revoked${date.map(_.toString).orElse(rawDate).fold("")(d => s" since $d")}${reason.fold("")(r => s": $r")}"
+      )
+
+  /** A 2xx body failed JSON decoding — schema drift between client and
+   *  directory, distinct from a `TransportError` (socket/IO failure).
+   *  `endpoint` is the DVDV path-segment name of the call that failed.
+   */
+  final case class DecodingError(endpoint: String, cause: io.circe.Error)
+      extends DvdvError(s"Decoding failure at '$endpoint': ${cause.getMessage}", cause)
 
   final case class TransportError(cause: Throwable)
       extends DvdvError(s"Transport error: ${cause.getMessage}", cause)

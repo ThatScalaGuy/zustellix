@@ -428,8 +428,9 @@ dvdv.findAuthorityDescription(Category.unsafe("Meldebehörde"), OrganizationKey.
   case Left(DvdvError.NotFound(p))              => IO.println(s"404: ${p.detail}")
   case Left(DvdvError.ValidationError(p))       => IO.println(s"400: ${p.detail}")
   case Left(DvdvError.AuthenticationError(p))   => IO.println(s"401: ${p.detail}")
-  case Left(DvdvError.Unexpected(status, body)) => IO.println(s"$status: $body")
-  case Left(DvdvError.TransportError(cause))    => IO.println(s"transport: $cause")
+  case Left(DvdvError.Unexpected(status, body, problem))  => IO.println(s"$status: $body")
+  case Left(DvdvError.DecodingError(endpoint, cause))     => IO.println(s"$endpoint returned an undecodable body: $cause")
+  case Left(DvdvError.TransportError(cause))              => IO.println(s"transport: $cause")
 }
 ```
 
