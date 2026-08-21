@@ -10,9 +10,12 @@ import de.osci.osci12.extinterfaces.TransportI
 trait OsciClient[F[_]] {
 
   /** Synchronous request/response (`MediateDelivery`): the recipient answers
-   *  within the call, e.g. the XMeld Personensuche.
+   *  within the call, e.g. the XMeld Personensuche. The returned
+   *  [[OsciResponse]] carries the response payload (`None` when the answer
+   *  had no extractable content) together with the intermediary's
+   *  `messageId`, `status` and `3xxx` warnings.
    */
-  def request(ags: String, xml: String): F[String]
+  def request(ags: String, xml: String): F[OsciResponse]
 
   /** Asynchronous send (`StoreDelivery`): stores the message in the
    *  recipient's mailbox at their intermediary and returns a receipt; the
