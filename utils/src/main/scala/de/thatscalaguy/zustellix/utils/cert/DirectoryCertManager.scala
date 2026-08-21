@@ -11,15 +11,16 @@ import scala.jdk.CollectionConverters.*
 
 /** @param dir           folder scanned for `<alias>.p12` keystores
  *  @param interval       poll period (rebuilds the map every `interval`)
- *  @param passwordsFile  `java.util.Properties` of `<alias>=<password>`
+ *  @param passwordsFile  optional `java.util.Properties` of `<alias>=<password>`;
+ *                        defaults to `<dir>/passwords.properties`
  */
 final case class DirectoryCertManagerConfig(
     dir: Path,
     interval: FiniteDuration = 30.seconds,
-    passwordsFile: Path = null
+    passwordsFile: Option[Path] = None
 ) {
   val passwords: Path =
-    if passwordsFile == null then dir.resolve("passwords.properties") else passwordsFile
+    passwordsFile.getOrElse(dir.resolve("passwords.properties"))
 }
 
 /** Polls [[DirectoryCertManagerConfig.dir]] every `interval`, rebuilding the

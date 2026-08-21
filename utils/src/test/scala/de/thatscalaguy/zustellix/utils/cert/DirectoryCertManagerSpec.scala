@@ -69,6 +69,21 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     DirectoryCertManagerConfig(dir = dir, interval = interval)
 
   // ---------------------------------------------------------------------------
+  // Config resolution: passwordsFile defaulting.
+  // ---------------------------------------------------------------------------
+
+  test("passwords resolves to <dir>/passwords.properties when passwordsFile is None") {
+    val d = Path.of("/var/lib/zustellix/certs")
+    assertEquals(DirectoryCertManagerConfig(dir = d).passwords, d.resolve("passwords.properties"))
+  }
+
+  test("passwords uses the explicit path when passwordsFile is Some") {
+    val d = Path.of("/var/lib/zustellix/certs")
+    val p = Path.of("/etc/zustellix/pw.properties")
+    assertEquals(DirectoryCertManagerConfig(dir = d, passwordsFile = Some(p)).passwords, p)
+  }
+
+  // ---------------------------------------------------------------------------
   // ACTIVE coverage: the per-entry cert logic the manager relies on.
   // ---------------------------------------------------------------------------
 
@@ -134,6 +149,24 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
       assertEquals(cred.password, "pw-a")
       assertEquals(aliases, Set(CertAlias("alice"), CertAlias("bob")))
     }
+  }
+
+  test("an explicit passwordsFile is honored by the scanner (no default file present)") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("custom-pw.properties"), "alice" -> "pw-a")
+             }
+      cred <- DirectoryCertManager
+                .resource[IO](
+                  DirectoryCertManagerConfig(
+                    dir = dir,
+                    passwordsFile = Some(dir.resolve("custom-pw.properties"))
+                  )
+                )
+                .use(_.resolve(CertAlias("alice")))
+    } yield assertEquals(cred.password, "pw-a")
   }
 
   test("a corrupt .p12 is skipped while the other aliases still resolve") {
