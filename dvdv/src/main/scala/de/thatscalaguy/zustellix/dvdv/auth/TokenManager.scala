@@ -24,20 +24,25 @@ object TokenManager {
 
   private final case class CachedToken(value: String, notAfter: Instant)
 
+  /** `resolve` is evaluated on every token acquisition (once per refresh, cheap),
+   *  so a rotated signing cert — e.g. from a hot-reloading `CertManager` — is
+   *  picked up without rebuilding the client. Pass a pure/memoized value for a
+   *  cert that is fixed for the lifetime of the manager.
+   */
   def make[F[_]: Async](
       client: Client[F],
       config: DvdvConfig,
-      loaded: LoadedCert
+      resolve: F[LoadedCert]
   ): F[TokenManager[F]] =
     for {
       ref   <- Ref.of[F, Option[CachedToken]](None)
       mutex <- Mutex[F]
-    } yield new Impl[F](client, config, loaded, ref, mutex)
+    } yield new Impl[F](client, config, resolve, ref, mutex)
 
   private final class Impl[F[_]: Async](
       client: Client[F],
       config: DvdvConfig,
-      loaded: LoadedCert,
+      resolve: F[LoadedCert],
       state: Ref[F, Option[CachedToken]],
       mutex: Mutex[F]
   ) extends TokenManager[F] {
@@ -71,7 +76,8 @@ object TokenManager {
 
     private def acquire(now: Instant): F[CachedToken] =
       for {
-        jwt <- JwtFactory.make[F](config, loaded)
+        loaded <- resolve
+        jwt    <- JwtFactory.make[F](config, loaded)
         form = UrlForm(
                  "grant_type"            -> "client_credentials",
                  "client_assertion_type" -> "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",

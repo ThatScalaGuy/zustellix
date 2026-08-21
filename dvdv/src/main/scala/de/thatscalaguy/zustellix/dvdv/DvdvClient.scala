@@ -56,12 +56,16 @@ object DvdvClient {
     for {
       loaded <- Resource.eval(loadConfigured[F](config))
       http   <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
-      client <- assemble[F](config, http, loaded)
+      client <- assemble[F](config, http, Async[F].pure(loaded))
     } yield client
 
   /** Build a DvdvClient whose signing cert is resolved from the shared
    *  [[CertManager]] by [[CertAlias]] (the cert signs the `client_assertion`
    *  JWT, so a client is scoped to one alias).
+   *
+   *  The alias is resolved once at build time to fail fast on a missing cert,
+   *  and again on every token refresh — so a cert rotated in the manager (e.g.
+   *  a hot-reloading `DirectoryCertManager`) is picked up without a restart.
    */
   def resource[F[_]: Async: Network](
       config: DvdvConfig,
@@ -69,25 +73,28 @@ object DvdvClient {
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
     for {
-      loaded <- Resource.eval(certs.loadedCert(alias))
+      _      <- Resource.eval(certs.loadedCert(alias))
       http   <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
-      client <- assemble[F](config, http, loaded)
+      client <- assemble[F](config, http, certs.loadedCert(alias))
     } yield client
 
   /** Build a DvdvClient over a caller-provided http4s Client.
    *  Useful for testing or when the caller wants to control the HTTP backend.
    */
   def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
-    Resource.eval(loadConfigured[F](config)).flatMap(assemble[F](config, http, _))
+    Resource.eval(loadConfigured[F](config)).flatMap(loaded => assemble[F](config, http, Async[F].pure(loaded)))
 
-  /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. */
+  /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. Like the
+   *  [[resource]] overload, the cert is re-resolved on every token refresh so
+   *  rotations in the [[CertManager]] take effect without a rebuild.
+   */
   def fromClient[F[_]: Async](
       config: DvdvConfig,
       http:   Client[F],
       certs:  CertManager[F],
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
-    Resource.eval(certs.loadedCert(alias)).flatMap(assemble[F](config, http, _))
+    Resource.eval(certs.loadedCert(alias)).flatMap(_ => assemble[F](config, http, certs.loadedCert(alias)))
 
   private def loadConfigured[F[_]: Sync](config: DvdvConfig): F[LoadedCert] =
     config.certSource match {
@@ -101,13 +108,13 @@ object DvdvClient {
     }
 
   private def assemble[F[_]: Async](
-      config: DvdvConfig,
-      http:   Client[F],
-      loaded: LoadedCert
+      config:  DvdvConfig,
+      http:    Client[F],
+      resolve: F[LoadedCert]
   ): Resource[F, DvdvClient[F]] =
     for {
       failover <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter)).map(_(http))
-      tokenMgr <- Resource.eval(TokenManager.make[F](failover, config, loaded))
+      tokenMgr <- Resource.eval(TokenManager.make[F](failover, config, resolve))
       authed    = AuthMiddleware(tokenMgr)(failover)
       raw       = HttpDvdvClient[F](authed, config)
       cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
