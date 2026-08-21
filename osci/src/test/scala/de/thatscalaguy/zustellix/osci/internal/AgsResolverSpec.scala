@@ -48,20 +48,21 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   private def stubDvdv(handler: (String, String) => IO[Option[Service]]): DvdvClient[IO] =
     new DvdvClient[IO] {
-      def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): IO[Option[Service]] =
-        handler(organizationKey, serviceSpecificationUri)
+      def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): IO[Option[Service]] =
+        handler(organizationKey.value, serviceSpecificationUri)
 
       // Unused by the resolver
       def categories                                                       = ???
       def intermediaries                                                   = ???
       def serviceVersion                                                   = ???
-      def findAuthorityDescription(c: String, o: String)                   = ???
-      def findAuthorityDescriptions(o: String)                             = ???
-      def findCategories(f: String, o: String)                             = ???
-      def findCertificateByFingerprint(f: String)                          = ???
+      def findAuthorityDescription(c: Category, o: OrganizationKey)        = ???
+      def findAuthorityDescriptions(o: OrganizationKey)                    = ???
+      def findCategories(f: Fingerprint, o: OrganizationKey)               = ???
+      def findCertificateByFingerprint(f: Fingerprint)                     = ???
       def findOrganizationsByServiceElement(s: ServiceElementType, p: ParameterType, v: String) = ???
-      def findServiceSpecificationUrisByCategory(c: String)                = ???
-      def verifyCategory(f: String, c: String)                             = ???
+      def findOrganizationsByServiceElement(c: String, p: ParameterType, v: String)            = ???
+      def findServiceSpecificationUrisByCategory(c: Category)              = ???
+      def verifyCategory(f: Fingerprint, c: Category)                      = ???
       def batchFindAuthorityDescription(rs: List[Request])                 = ???
       def batchFindCategories(rs: List[Request])                           = ???
       def batchFindOrganizationsByServiceElement(rs: List[Request])        = ???

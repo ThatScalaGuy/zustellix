@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{Async, Resource, Sync}
+import cats.syntax.functor.*
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
 import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
@@ -9,13 +10,15 @@ import fs2.io.net.Network
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.client.Client
 
-/** Tagless-final algebra for the DVDV2 v2 directory API
- *  (entry path `extern/standaloneauth/directory`).
+/** Tagless-final algebra for the DVDV2 v2 directory API. The entry path is
+ *  configurable via [[DvdvConfig.entryPath]] (default
+ *  `extern/standaloneauth/directory`, see [[DvdvEntryPath]]).
  *
- *  The configured client certificate is used exclusively to sign the
- *  `client_assertion` JWT (RS256). It is NOT installed as a TLS client
- *  certificate — the DVDV2 protocol verifies cert possession via the
- *  signed JWT, not via mTLS.
+ *  With [[DvdvEntryPath.StandaloneAuth]], the configured client certificate
+ *  is used exclusively to sign the `client_assertion` JWT (RS256). It is NOT
+ *  installed as a TLS client certificate — the DVDV2 protocol verifies cert
+ *  possession via the signed JWT, not via mTLS. The unauthenticated entry
+ *  paths need no cert at all.
  */
 trait DvdvClient[F[_]] {
 
@@ -25,24 +28,58 @@ trait DvdvClient[F[_]] {
   def serviceVersion: F[ServiceVersion]
 
   // 8 query-style GETs (request_json=...)
-  def findAuthorityDescription(category: String, organizationKey: String): F[Option[OrganizationDescription]]
-  def findAuthorityDescriptions(organizationKey: String): F[List[OrganizationDescription]]
-  def findCategories(fingerPrint: String, organizationKey: String): F[List[String]]
-  def findCertificateByFingerprint(fingerPrint: String): F[Option[Certificate]]
+  def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]]
+  def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]]
+  def findCategories(fingerPrint: Fingerprint, organizationKey: OrganizationKey): F[List[String]]
+  def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]]
   def findOrganizationsByServiceElement(
       serviceElementType: ServiceElementType,
       parameterType: ParameterType,
       parameterValue: String
   ): F[List[LightweightOrganization]]
-  def findServiceDescription(organizationKey: String, serviceSpecificationUri: String): F[Option[Service]]
-  def findServiceSpecificationUrisByCategory(category: String): F[List[String]]
-  def verifyCategory(fingerPrint: String, category: String): F[VerificationResult]
 
-  // 6 batch POSTs
-  def batchFindAuthorityDescription(requests: List[Request]): F[List[OrganizationDescription]]
+  /** Like the `ServiceElementType` overload, but for operator-configured
+   *  service-element types: sends the spec's `customServiceElementType`
+   *  request field instead of `serviceElementType`.
+   */
+  def findOrganizationsByServiceElement(
+      customServiceElementType: String,
+      parameterType: ParameterType,
+      parameterValue: String
+  ): F[List[LightweightOrganization]]
+  def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]]
+  def findServiceSpecificationUrisByCategory(category: Category): F[List[String]]
+  def verifyCategory(fingerPrint: Fingerprint, category: Category): F[VerificationResult]
+
+  // 6 batch POSTs.
+  //
+  // All batch methods raise [[DvdvError.BatchTooLarge]] before any HTTP call
+  // when given more than 200 requests (the spec's `maxItems: 200`). A typed
+  // error was chosen over transparent chunking because chunking multiplies
+  // authenticated wire calls invisibly and cannot preserve atomicity if a
+  // later chunk fails. A response array whose length differs from the input
+  // list raises [[DvdvError.BatchSizeMismatch]] instead of returning
+  // silently misaligned results.
+
+  /** Batch variant of [[findAuthorityDescription]]. Results are positionally
+   *  aligned with the input `requests` list. A per-item miss is assumed to be
+   *  encoded as a positional JSON null — mirroring the 204/404 miss semantics
+   *  of the single-call variant; the OpenAPI spec does not specify the batch
+   *  miss encoding — and decodes to `None` at that index. Raises
+   *  [[DvdvError.BatchTooLarge]] for more than 200 requests.
+   */
+  def batchFindAuthorityDescription(requests: List[Request]): F[List[Option[OrganizationDescription]]]
   def batchFindCategories(requests: List[Request]): F[List[List[String]]]
   def batchFindOrganizationsByServiceElement(requests: List[Request]): F[List[List[LightweightOrganization]]]
-  def batchFindServiceDescription(requests: List[Request]): F[List[Service]]
+
+  /** Batch variant of [[findServiceDescription]]. Results are positionally
+   *  aligned with the input `requests` list. A per-item miss is assumed to be
+   *  encoded as a positional JSON null — mirroring the 204/404 miss semantics
+   *  of the single-call variant; the OpenAPI spec does not specify the batch
+   *  miss encoding — and decodes to `None` at that index. Raises
+   *  [[DvdvError.BatchTooLarge]] for more than 200 requests.
+   */
+  def batchFindServiceDescription(requests: List[Request]): F[List[Option[Service]]]
   def batchFindServiceSpecificationUrisByCategory(requests: List[Request]): F[List[List[String]]]
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 }
@@ -54,9 +91,9 @@ object DvdvClient {
    */
   def resource[F[_]: Async: Network](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
-      loaded <- Resource.eval(loadConfigured[F](config))
-      http   <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
-      client <- assemble[F](config, http, Async[F].pure(loaded))
+      resolve <- Resource.eval(configuredResolve[F](config))
+      http    <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
+      client  <- assemble[F](config, http, resolve)
     } yield client
 
   /** Build a DvdvClient whose signing cert is resolved from the shared
@@ -82,7 +119,7 @@ object DvdvClient {
    *  Useful for testing or when the caller wants to control the HTTP backend.
    */
   def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
-    Resource.eval(loadConfigured[F](config)).flatMap(loaded => assemble[F](config, http, Async[F].pure(loaded)))
+    Resource.eval(configuredResolve[F](config)).flatMap(resolve => assemble[F](config, http, resolve))
 
   /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. Like the
    *  [[resource]] overload, the cert is re-resolved on every token refresh so
@@ -95,6 +132,19 @@ object DvdvClient {
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
     Resource.eval(certs.loadedCert(alias)).flatMap(_ => assemble[F](config, http, certs.loadedCert(alias)))
+
+  /** The cert-resolution effect for [[assemble]], shaped by the entry path.
+   *  For [[DvdvEntryPath.StandaloneAuth]] the cert is loaded eagerly (fail
+   *  fast on a missing/broken `certSource`) and the resolve step just returns
+   *  it. For the unauthenticated entry paths no token manager is built, so
+   *  the (never-run) resolve step is deferred and no `certSource` is
+   *  required.
+   */
+  private def configuredResolve[F[_]: Sync](config: DvdvConfig): F[F[LoadedCert]] =
+    if (config.entryPath.usesStandaloneToken)
+      loadConfigured[F](config).map(loaded => Sync[F].pure(loaded))
+    else
+      Sync[F].pure(loadConfigured[F](config))
 
   private def loadConfigured[F[_]: Sync](config: DvdvConfig): F[LoadedCert] =
     config.certSource match {
@@ -113,10 +163,20 @@ object DvdvClient {
       resolve: F[LoadedCert]
   ): Resource[F, DvdvClient[F]] =
     for {
-      failover <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter)).map(_(http))
-      tokenMgr <- Resource.eval(TokenManager.make[F](failover, config, resolve))
-      authed    = AuthMiddleware(tokenMgr)(failover)
-      raw       = HttpDvdvClient[F](authed, config)
+      handle   <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter))
+      failover  = handle.middleware(http)
+      directory <- if (config.entryPath.usesStandaloneToken) {
+                     val tokenEp = handle.activeServer.map(config.tokenUriFor)
+                     // An explicit tokenEndpoint is an exact wire target — routing it
+                     // through the failover middleware would rewrite its authority to a
+                     // directory server, so token POSTs go straight to the underlying
+                     // client instead.
+                     val tokenHttp = if (config.tokenEndpoint.isDefined) http else failover
+                     Resource
+                       .eval(TokenManager.make[F](tokenHttp, config, resolve, tokenEp))
+                       .map(tokenMgr => AuthMiddleware(tokenMgr)(failover))
+                   } else Resource.pure[F, Client[F]](failover)
+      raw       = HttpDvdvClient[F](directory, config)
       cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
     } yield cached
 }

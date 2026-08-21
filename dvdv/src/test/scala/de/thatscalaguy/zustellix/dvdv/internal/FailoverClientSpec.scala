@@ -31,7 +31,7 @@ class FailoverClientSpec extends CatsEffectSuite {
   private def make(servers: NonEmptyList[Uri], recoverAfter: FiniteDuration = 180.seconds)(
       underlying: Client[IO]
   ): IO[Client[IO]] =
-    FailoverClient.make[IO](servers, recoverAfter).map(_(underlying))
+    FailoverClient.make[IO](servers, recoverAfter).map(_.middleware(underlying))
 
   private val req = Request[IO](Method.GET, uri"http://ignored/path")
 
@@ -145,12 +145,37 @@ class FailoverClientSpec extends CatsEffectSuite {
     val backend = routed(hits)(_ => IO(Response[IO](Status.ServiceUnavailable).withEntity("boom")))
     for {
       c   <- make(NonEmptyList(primary, List(secondary)))(backend)
-      err <- c.run(req).use(ResponseDecoder.required[IO, String](_)).attempt
+      err <- c.run(req).use(ResponseDecoder.required[IO, String]("test", _)).attempt
     } yield err match {
-      case Left(DvdvError.ServerError(status, body)) =>
+      case Left(DvdvError.ServerError(status, body, problem)) =>
         assertEquals(status, 503)
         assertEquals(body, "boom")
+        assertEquals(problem, None)
       case other => fail(s"expected ServerError, got $other")
+    }
+  }
+
+  test("activeServer tracks failover and recovery") {
+    val hits        = Ref.unsafe[IO, List[String]](Nil)
+    val primaryDown = Ref.unsafe[IO, Boolean](true)
+    val backend = routed(hits) {
+      case "primary" => primaryDown.get.map(d => Response[IO](if (d) Status.InternalServerError else Status.Ok))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      h  <- FailoverClient.make[IO](NonEmptyList(primary, List(secondary)), recoverAfter = 50.millis)
+      c   = h.middleware(backend)
+      a0 <- h.activeServer
+      _  <- c.status(req)          // fail over to secondary
+      a1 <- h.activeServer
+      _  <- primaryDown.set(false) // primary healthy again
+      _  <- IO.sleep(80.millis)    // recover window elapses
+      _  <- c.status(req)          // recovery attempt succeeds
+      a2 <- h.activeServer
+    } yield {
+      assertEquals(a0, primary)
+      assertEquals(a1, secondary)
+      assertEquals(a2, primary)
     }
   }
 

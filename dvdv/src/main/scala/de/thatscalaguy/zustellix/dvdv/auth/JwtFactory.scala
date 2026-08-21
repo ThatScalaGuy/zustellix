@@ -5,6 +5,7 @@ import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvConfig
 import de.thatscalaguy.zustellix.dvdv.DvdvError
 import de.thatscalaguy.zustellix.utils.cert.LoadedCert
+import org.http4s.Uri
 import pdi.jwt.algorithms.JwtAsymmetricAlgorithm
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 
@@ -15,7 +16,11 @@ import java.util.UUID
 
 object JwtFactory {
 
-  def make[F[_]: Sync](config: DvdvConfig, loaded: LoadedCert): F[String] =
+  /** Mints the `client_assertion` JWT. `tokenEndpoint` is the endpoint the
+   *  token POST is actually sent to; it becomes the `aud` claim unless
+   *  `config.jwtAudience` pins it.
+   */
+  def make[F[_]: Sync](config: DvdvConfig, loaded: LoadedCert, tokenEndpoint: Uri): F[String] =
     for {
       now <- Sync[F].delay(Instant.now())
       alg <- Sync[F].fromEither(algorithmFor(loaded.privateKey))
@@ -24,7 +29,7 @@ object JwtFactory {
       val claim = JwtClaim(
         issuer    = Some(config.issuer.getOrElse(sub)),
         subject   = Some(sub),
-        audience  = Some(Set(config.tokenUri.renderString)),
+        audience  = Some(Set(config.jwtAudience.getOrElse(tokenEndpoint.renderString))),
         issuedAt  = Some(now.getEpochSecond),
         notBefore = Some(now.getEpochSecond),
         expiration = Some(now.plusSeconds(config.jwtLifetime.toSeconds).getEpochSecond),

@@ -5,13 +5,25 @@ import cats.effect.Sync
 import java.io.{ByteArrayInputStream, InputStream}
 import java.nio.file.{Files, Path}
 import java.security.cert.{CertificateFactory, X509Certificate}
-import java.security.{KeyStore, MessageDigest, PrivateKey, Security}
+import java.security.{KeyStore, MessageDigest, PrivateKey}
 import scala.jdk.CollectionConverters.*
 
+/** A private key plus its certificate as loaded from a [[CertSource]].
+ *
+ *  `fingerprintSha1Hex` and `fingerprintSha256Hex` are lowercase hex digests
+ *  over `certificate.getEncoded`.
+ *
+ *  `chain` follows JSSE `getCertificateChain` semantics: the leaf certificate
+ *  is the head (`chain.head == certificate`), followed by any intermediate/CA
+ *  certificates the source provides. Single-certificate sources yield
+ *  `chain == List(certificate)`.
+ */
 final case class LoadedCert(
     privateKey: PrivateKey,
     certificate: X509Certificate,
-    fingerprintSha1Hex: String
+    fingerprintSha1Hex: String,
+    fingerprintSha256Hex: String,
+    chain: List[X509Certificate]
 )
 
 object CertLoader {
@@ -43,7 +55,12 @@ object CertLoader {
 
     val pk   = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
     val cert = ks.getCertificate(alias).asInstanceOf[X509Certificate]
-    LoadedCert(pk, cert, sha1Hex(cert.getEncoded))
+    val chain = Option(ks.getCertificateChain(alias))
+      .map(_.toList.map(_.asInstanceOf[X509Certificate]))
+      .filter(_.nonEmpty)
+      .getOrElse(List(cert))
+    val encoded = cert.getEncoded
+    LoadedCert(pk, cert, fingerprintHex("SHA-1", encoded), fingerprintHex("SHA-256", encoded), chain)
   }
 
   private def loadPem[F[_]: Sync](certPath: Path, keyPath: Path, keyPassword: Option[String]): F[LoadedCert] =
@@ -60,23 +77,25 @@ object CertLoader {
       keyPassword: Option[String],
       keyLabel: String
   ): LoadedCert = {
-    registerBouncyCastle()
-
     val cf     = CertificateFactory.getInstance("X.509")
     val certIn = new ByteArrayInputStream(certBytes)
-    val cert =
-      try cf.generateCertificate(certIn).asInstanceOf[X509Certificate]
+    val certs =
+      try cf.generateCertificates(certIn).asScala.toList.map(_.asInstanceOf[X509Certificate])
       finally certIn.close()
+    val cert = certs.headOption.getOrElse(
+      throw new IllegalArgumentException("No certificate found in PEM input")
+    )
 
     val privateKey = readPemPrivateKey(keyBytes, keyPassword, keyLabel)
 
-    LoadedCert(privateKey, cert, sha1Hex(cert.getEncoded))
+    val encoded = cert.getEncoded
+    LoadedCert(privateKey, cert, fingerprintHex("SHA-1", encoded), fingerprintHex("SHA-256", encoded), certs)
   }
 
-  private def registerBouncyCastle(): Unit =
-    if (Security.getProvider("BC") == null) {
-      val _ = Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
-    }
+  /** Local BouncyCastle instance passed to the PEM converters directly — no
+   *  JVM-global `Security.addProvider` registration.
+   */
+  private lazy val bcProvider = new org.bouncycastle.jce.provider.BouncyCastleProvider()
 
   private def readPemPrivateKey(keyBytes: Array[Byte], keyPassword: Option[String], keyLabel: String): PrivateKey = {
     import org.bouncycastle.openssl.{PEMEncryptedKeyPair, PEMKeyPair, PEMParser}
@@ -88,7 +107,7 @@ object CertLoader {
     val parser = new PEMParser(reader)
     try {
       val obj      = parser.readObject()
-      val converter = new JcaPEMKeyConverter().setProvider("BC")
+      val converter = new JcaPEMKeyConverter().setProvider(bcProvider)
       obj match {
         case kp: PEMKeyPair =>
           converter.getKeyPair(kp).getPrivate
@@ -96,13 +115,13 @@ object CertLoader {
           val pwd = keyPassword.getOrElse(
             throw new IllegalArgumentException(s"PEM private key at $keyLabel is encrypted; keyPassword required")
           )
-          val decryptor = new JcePEMDecryptorProviderBuilder().build(pwd.toCharArray)
+          val decryptor = new JcePEMDecryptorProviderBuilder().setProvider(bcProvider).build(pwd.toCharArray)
           converter.getKeyPair(enc.decryptKeyPair(decryptor)).getPrivate
         case enc: PKCS8EncryptedPrivateKeyInfo =>
           val pwd = keyPassword.getOrElse(
             throw new IllegalArgumentException(s"PEM PKCS#8 private key at $keyLabel is encrypted; keyPassword required")
           )
-          val decryptor = new JceOpenSSLPKCS8DecryptorProviderBuilder().setProvider("BC").build(pwd.toCharArray)
+          val decryptor = new JceOpenSSLPKCS8DecryptorProviderBuilder().setProvider(bcProvider).build(pwd.toCharArray)
           converter.getPrivateKey(enc.decryptPrivateKeyInfo(decryptor))
         case info: PrivateKeyInfo =>
           converter.getPrivateKey(info)
@@ -117,8 +136,6 @@ object CertLoader {
     }
   }
 
-  private def sha1Hex(bytes: Array[Byte]): String = {
-    val md = MessageDigest.getInstance("SHA-1")
-    md.digest(bytes).map(b => f"$b%02x").mkString
-  }
+  private def fingerprintHex(algorithm: String, bytes: Array[Byte]): String =
+    MessageDigest.getInstance(algorithm).digest(bytes).map(b => f"$b%02x").mkString
 }

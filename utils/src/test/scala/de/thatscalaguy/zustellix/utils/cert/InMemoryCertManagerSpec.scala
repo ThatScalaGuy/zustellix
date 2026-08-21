@@ -44,6 +44,23 @@ class InMemoryCertManagerSpec extends CatsEffectSuite {
     } yield assertEquals(lc.privateKey.getAlgorithm, "RSA")
   }
 
+  test("loadedCert failure surfaces as LoadFailed with alias and cause") {
+    val broken = CertAlias("broken")
+    for {
+      mgr <- InMemoryCertManager.make[IO](Map(broken -> CertCredential("garbage".getBytes, "pw")))
+      e   <- mgr.loadedCert(broken).attempt
+    } yield e match {
+      case Left(CertManagerError.LoadFailed(a, cause)) =>
+        assertEquals(a, broken)
+        assert(cause != null, "LoadFailed must carry the underlying cause")
+      case other => fail(s"expected LoadFailed, got $other")
+    }
+  }
+
+  test("CertManagerError carries no stack trace") {
+    assert(CertManagerError.UnknownCert(alias).getStackTrace.isEmpty)
+  }
+
   test("swap hot-replaces the active map") {
     val alias2 = CertAlias("other-alias")
     for {

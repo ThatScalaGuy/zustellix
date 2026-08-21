@@ -7,8 +7,10 @@ import org.typelevel.log4cats.noop.NoOpFactory
 
 import java.io.{ByteArrayOutputStream, FileOutputStream}
 import java.math.BigInteger
+import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path}
 import java.security.KeyStore
+import java.time.Instant
 import java.util.{Date, Properties}
 import scala.concurrent.duration.*
 
@@ -67,6 +69,21 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
 
   private def cfg(dir: Path, interval: FiniteDuration = 30.seconds) =
     DirectoryCertManagerConfig(dir = dir, interval = interval)
+
+  // ---------------------------------------------------------------------------
+  // Config resolution: passwordsFile defaulting.
+  // ---------------------------------------------------------------------------
+
+  test("passwords resolves to <dir>/passwords.properties when passwordsFile is None") {
+    val d = Path.of("/var/lib/zustellix/certs")
+    assertEquals(DirectoryCertManagerConfig(dir = d).passwords, d.resolve("passwords.properties"))
+  }
+
+  test("passwords uses the explicit path when passwordsFile is Some") {
+    val d = Path.of("/var/lib/zustellix/certs")
+    val p = Path.of("/etc/zustellix/pw.properties")
+    assertEquals(DirectoryCertManagerConfig(dir = d, passwordsFile = Some(p)).passwords, p)
+  }
 
   // ---------------------------------------------------------------------------
   // ACTIVE coverage: the per-entry cert logic the manager relies on.
@@ -136,6 +153,24 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
+  test("an explicit passwordsFile is honored by the scanner (no default file present)") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("custom-pw.properties"), "alice" -> "pw-a")
+             }
+      cred <- DirectoryCertManager
+                .resource[IO](
+                  DirectoryCertManagerConfig(
+                    dir = dir,
+                    passwordsFile = Some(dir.resolve("custom-pw.properties"))
+                  )
+                )
+                .use(_.resolve(CertAlias("alice")))
+    } yield assertEquals(cred.password, "pw-a")
+  }
+
   test("a corrupt .p12 is skipped while the other aliases still resolve") {
     for {
       dir <- tempDir
@@ -190,6 +225,98 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
       assertEquals(after.password, "pw-a2")
       assert(!before.pkcs12.sameElements(after.pkcs12), "rotated keystore bytes must change")
     }
+  }
+
+  test("rescans over an unchanged directory reuse the same CertCredential instance") {
+    val interval = 150.millis
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 before <- mgr.resolve(CertAlias("alice"))
+                 _      <- IO.sleep(interval * 4) // several rescans, nothing changed
+                 after  <- mgr.resolve(CertAlias("alice"))
+               } yield (before, after)
+             }
+    } yield {
+      val (before, after) = out
+      assert(before eq after, "unchanged keystore must keep the same CertCredential instance")
+    }
+  }
+
+  test("a modified keystore yields a new credential instance after a rescan") {
+    val interval = 150.millis
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 before <- mgr.resolve(CertAlias("alice"))
+                 _      <- IO.blocking {
+                             writeP12(dir, "alice", "pw-a") // fresh key => new bytes
+                             val _ = Files.setLastModifiedTime(
+                               dir.resolve("alice.p12"),
+                               FileTime.from(Instant.now().plusSeconds(2))
+                             )
+                           }
+                 _      <- IO.sleep(interval * 4)
+                 after  <- mgr.resolve(CertAlias("alice"))
+               } yield (before, after)
+             }
+    } yield {
+      val (before, after) = out
+      assert(!(before eq after), "modified keystore must produce a new CertCredential instance")
+      assert(!before.pkcs12.sameElements(after.pkcs12), "rewritten keystore bytes must change")
+    }
+  }
+
+  test("a changed password entry for an unchanged keystore is not served from the cache") {
+    val interval = 150.millis
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "alice", "pw-a")
+               writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-a")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir, interval)).use { mgr =>
+               for {
+                 before <- mgr.resolve(CertAlias("alice"))
+                 // keystore untouched, but the password entry changes: the scan
+                 // must reload with pw-b (which fails) instead of serving the
+                 // cached pw-a credential.
+                 _     <- IO.blocking(
+                            writePasswords(dir.resolve("passwords.properties"), "alice" -> "pw-b")
+                          )
+                 _     <- IO.sleep(interval * 4)
+                 after <- mgr.resolve(CertAlias("alice")).attempt
+               } yield (before, after)
+             }
+    } yield {
+      val (before, after) = out
+      assertEquals(before.password, "pw-a")
+      assert(after.isLeft, s"stale pw-a credential must not be reused, got $after")
+    }
+  }
+
+  test("a custom PasswordSource overrides the properties file") {
+    val source: IO[PasswordSource[IO]] = IO.pure(
+      new PasswordSource[IO] {
+        def passwordFor(a: CertAlias): IO[Option[String]] =
+          IO.pure(Option.when(a == CertAlias("alice"))("pw-a"))
+      }
+    )
+    for {
+      dir  <- tempDir
+      _    <- IO.blocking(writeP12(dir, "alice", "pw-a")) // no passwords file at all
+      cred <- DirectoryCertManager.resource[IO](cfg(dir), source).use(_.resolve(CertAlias("alice")))
+    } yield assertEquals(cred.password, "pw-a")
   }
 
   test("a transient bad scan does not kill the poll loop; a later good scan still updates") {
