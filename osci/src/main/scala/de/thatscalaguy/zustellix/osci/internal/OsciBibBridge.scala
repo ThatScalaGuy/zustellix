@@ -138,7 +138,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         )
 
         OsciRawResult(
-          responseXml = verified.map(_._1).getOrElse(""),
+          responseXml = verified.map(_._1),
           messageId   = msgIdResp.getMessageId,
           status      = topFeedbackCode(rsp.getFeedback),
           warnings    = feedbackWarnings(rsp.getFeedback),

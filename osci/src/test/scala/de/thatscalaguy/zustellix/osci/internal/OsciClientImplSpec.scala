@@ -56,8 +56,8 @@ class OsciClientImplSpec extends CatsEffectSuite {
       IO.raiseError(new RuntimeException("sink down"))
   }
 
-  test("happy path returns response xml and records a Laufzettel") {
-    val raw = OsciRawResult("<resp/>", "msg-1", "OK")
+  test("happy path returns the response and records a Laufzettel") {
+    val raw = OsciRawResult(Some("<resp/>"), "msg-1", "OK")
     Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
       val impl = new OsciClientImpl[IO](
         TenantId("alice"),
@@ -71,7 +71,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         seen <- ref.get
       }
       yield {
-        assertEquals(out, "<resp/>")
+        assertEquals(out, OsciResponse(Some("<resp/>"), "msg-1", "OK"))
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "msg-1")
         assertEquals(seen.head.recipientAgs, Ags)
@@ -80,9 +80,8 @@ class OsciClientImplSpec extends CatsEffectSuite {
     }
   }
 
-  test("feedback warnings from the transport land on the Laufzettel") {
-    val warning = OsciFeedback("3802", "Signatur des Empfängers fehlt")
-    val raw     = OsciRawResult("<resp/>", "msg-1", "3802", List(warning))
+  test("request: a response without extractable content yields xml = None") {
+    val raw = OsciRawResult(None, "msg-1", "0800")
     Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
       val impl = new OsciClientImpl[IO](
         TenantId("alice"),
@@ -96,7 +95,29 @@ class OsciClientImplSpec extends CatsEffectSuite {
         seen <- ref.get
       }
       yield {
-        assertEquals(out, "<resp/>")
+        assertEquals(out, OsciResponse(None, "msg-1", "0800"))
+        assertEquals(seen.head.rawXml, "")
+      }
+    }
+  }
+
+  test("feedback warnings from the transport land on the response and the Laufzettel") {
+    val warning = OsciFeedback("3802", "Signatur des Empfängers fehlt")
+    val raw     = OsciRawResult(Some("<resp/>"), "msg-1", "3802", List(warning))
+    Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
+      val impl = new OsciClientImpl[IO](
+        TenantId("alice"),
+        "XMeld",
+        fixedTransport(raw),
+        fixedResolver(Route),
+        recordingSink(ref)
+      )
+      for {
+        out  <- impl.request(Ags, "<req/>")
+        seen <- ref.get
+      }
+      yield {
+        assertEquals(out, OsciResponse(Some("<resp/>"), "msg-1", "3802", List(warning)))
         assertEquals(seen.head.status, "3802")
         assertEquals(seen.head.warnings, List(warning))
       }
@@ -105,7 +126,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
 
   test("the content-signature status from the transport lands on the Laufzettel") {
     val raw = OsciRawResult(
-      "<resp/>", "msg-1", "0800", Nil, Some(ContentSignatureStatus.Unsigned)
+      Some("<resp/>"), "msg-1", "0800", Nil, Some(ContentSignatureStatus.Unsigned)
     )
     Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
       val impl = new OsciClientImpl[IO](
@@ -203,7 +224,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
       val impl = new OsciClientImpl[IO](
         TenantId("alice"),
         "XMeld",
-        fixedTransport(OsciRawResult("<x/>", "m", "OK")),
+        fixedTransport(OsciRawResult(Some("<x/>"), "m", "OK")),
         failingResolver(err),
         recordingSink(ref)
       )
@@ -241,7 +262,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
     val impl = new OsciClientImpl[IO](
       TenantId("alice"),
       "XMeld",
-      fixedTransport(OsciRawResult("<x/>", "m", "OK")),
+      fixedTransport(OsciRawResult(Some("<x/>"), "m", "OK")),
       failingResolver(OsciError.AgsNotInDvdv("nope", "u")),
       LaufzettelSink.noop[IO]
     )
@@ -267,7 +288,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
   }
 
   test("sink failure does not fail request") {
-    val raw  = OsciRawResult("<resp/>", "m", "OK")
+    val raw  = OsciRawResult(Some("<resp/>"), "m", "OK")
     val impl = new OsciClientImpl[IO](
       TenantId("alice"),
       "XMeld",
@@ -275,7 +296,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
       fixedResolver(Route),
       failingSink
     )
-    impl.request(Ags, "<req/>").assertEquals("<resp/>")
+    impl.request(Ags, "<req/>").assertEquals(OsciResponse(Some("<resp/>"), "m", "OK"))
   }
 
   test("send happy path returns the receipt and records a Laufzettel without payload") {

@@ -78,6 +78,13 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   access compile unchanged; pattern matches that destructure every field
 >   need the new one, and codecs/schemas derived from the case-class shape
 >   (circe, doobie, a DB table mirroring `Laufzettel`) must add it.
+> - `OsciClient.request` / `OsciFacade.request` now return `F[OsciResponse]`
+>   instead of `F[String]`: the response payload moved to
+>   `OsciResponse.xml: Option[String]` — `None` (instead of the former `""`)
+>   when the answer had no extractable content — and the intermediary's
+>   `messageId`, `status` and `3xxx` `warnings` are now visible on the
+>   synchronous path too. Callers that only want the payload use
+>   `rsp.xml.getOrElse("")`.
 > - `request` / `send` no longer raise `OsciError.OsciResponse` for `3xxx`
 >   feedback (e.g. `3802` "Signatur des Empfängers über die Annahme- bzw.
 >   Bearbeitungsantwort fehlt") — the call succeeds and the codes land in
@@ -396,7 +403,7 @@ one:
 
 | Operation | OSCI message type | Shape |
 |-----------|-------------------|-------|
-| `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche) |
+| `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche), returns an `OsciResponse` |
 | `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
 | `OsciMailbox.pending` / `fetch`| `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie) |
 
@@ -446,12 +453,25 @@ object SendDemo extends IOApp.Simple:
       dvdv <- DvdvClient.resource[IO](dvdvConfig)
       osci <- OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO])
     yield osci).use { osci =>
-      osci.request(ags = "01001000", xml = "<xmeld>...</xmeld>").flatMap(IO.println)
+      osci.request(ags = "01001000", xml = "<xmeld>...</xmeld>").flatMap { rsp =>
+        IO.println(s"[${rsp.status}] ${rsp.xml.getOrElse("<no content>")}")
+      }
     }
 ```
 
 The given `DvdvClient` is owned by the caller — the `OsciClient` resource does
 not close it.
+
+`request` returns an `OsciResponse(xml, messageId, status, warnings)`:
+
+- `xml: Option[String]` — the recipient's decrypted (and per policy
+  signature-checked) response payload; `None` when the answer carried no
+  extractable content;
+- `messageId: String` — the intermediary-issued message id, the handle for
+  any later process-card inquiry;
+- `status: String` — the top OSCI feedback code (e.g. `"0800"`);
+- `warnings: List[OsciFeedback]` — warning-class (`3xxx`) feedback, e.g.
+  `3802` (see [OSCI feedback codes](#osci-feedback-codes)).
 
 ### Asynchronous send (StoreDelivery)
 
@@ -734,7 +754,7 @@ the four-digit code:
 | Class  | Meaning | Handling |
 |--------|---------|----------|
 | `0xxx` | success | normal result |
-| `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciReceipt.warnings` and `Laufzettel.warnings` |
+| `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciResponse.warnings`, `OsciReceipt.warnings` and `Laufzettel.warnings` |
 | `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued) |
 
 All feedback rows are inspected, so an error behind a per-language duplicate

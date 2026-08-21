@@ -23,11 +23,12 @@ final case class OsciRoute(
 )
 
 /** Raw OSCI transmission result, before being mapped into a domain Laufzettel.
+ *  `responseXml` is `None` when the response carried no extractable content.
  *  `signature` is the verified content-signature status of `responseXml`
  *  (`None` when the response carried no content to check).
  */
 final case class OsciRawResult(
-    responseXml: String,
+    responseXml: Option[String],
     messageId:   String,
     status:      String,
     warnings:    List[OsciFeedback] = Nil,

@@ -8,6 +8,7 @@ import de.thatscalaguy.zustellix.osci.{
   OsciClient,
   OsciError,
   OsciReceipt,
+  OsciResponse,
   TenantId
 }
 
@@ -21,7 +22,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
     sink:      LaufzettelSink[F]
 ) extends OsciClient[F] {
 
-  def request(ags: String, xml: String): F[String] =
+  def request(ags: String, xml: String): F[OsciResponse] =
     for {
       route  <- resolver.resolve(ags)
                   .onError { case e => recordFailure(ags, None, e) }
@@ -34,13 +35,18 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                   recipientAgs = ags,
                   recipientUri = route.addresseeUri,
                   status       = result.status,
-                  rawXml       = result.responseXml,
+                  rawXml       = result.responseXml.getOrElse(""),
                   warnings     = result.warnings,
                   contentSignature = result.signature
                 )
       _      <- sink.record(tenantId, lz).attempt.void
     }
-    yield result.responseXml
+    yield OsciResponse(
+      xml       = result.responseXml,
+      messageId = result.messageId,
+      status    = result.status,
+      warnings  = result.warnings
+    )
 
   def send(ags: String, xml: String): F[OsciReceipt] =
     for {
