@@ -17,6 +17,7 @@ import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
+import org.typelevel.ci.CIString
 import pdi.jwt.{JwtCirce, JwtOptions}
 
 import java.nio.file.Paths
@@ -48,6 +49,44 @@ class DvdvClientSpec extends CatsEffectSuite {
             )
       _ <- DvdvClient.fromClient[IO](cfg, http).use_
     } yield ()
+  }
+
+  private def unauthenticatedEntryPathTest(
+      entryPath: DvdvEntryPath,
+      versionSegments: List[String]
+  ): IO[Unit] =
+    for {
+      authHeaders <- Ref.of[IO, List[Option[String]]](Nil)
+      tokenPosts  <- Ref.of[IO, Int](0)
+      routes = HttpRoutes.of[IO] {
+                 case req @ GET -> path if path.segments.map(_.decoded()).toList == versionSegments =>
+                   authHeaders.update(_ :+ req.headers.get(CIString("Authorization")).map(_.head.value)) *>
+                     Ok(Json.fromString("v1"))
+                 case POST -> Root / "extern" / "standaloneauth" / "token" =>
+                   tokenPosts.update(_ + 1) *> Ok(Json.obj())
+               }
+      cfg = DvdvConfig(baseUri = uri"http://dvdv.test", entryPath = entryPath) // no certSource
+      v     <- DvdvClient.fromClient[IO](cfg, Client.fromHttpApp(routes.orNotFound)).use(_.serviceVersion)
+      auths <- authHeaders.get
+      posts <- tokenPosts.get
+    } yield {
+      assertEquals(v.raw, Some("v1"))
+      assertEquals(auths, List(None)) // exactly one request, no Authorization header
+      assertEquals(posts, 0)          // no token POST
+    }
+
+  test("fromClient with InternDirectory needs no cert and sends unauthenticated requests") {
+    unauthenticatedEntryPathTest(
+      DvdvEntryPath.InternDirectory,
+      List("intern", "directory", "v2", "version")
+    )
+  }
+
+  test("fromClient with BundesmasterAuth targets extern/bundesmasterauth/directory and wires no auth") {
+    unauthenticatedEntryPathTest(
+      DvdvEntryPath.BundesmasterAuth,
+      List("extern", "bundesmasterauth", "directory", "v2", "version")
+    )
   }
 
   test("fromClient with a CertManager fails fast on an unknown alias") {

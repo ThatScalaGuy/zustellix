@@ -4,8 +4,8 @@ A typed, **tagless-final Scala 3** toolkit for the German public-administration
 messaging stack:
 
 - **`dvdv`** — a client for the [**DVDV2 v2 öffentliche API**](https://www.dataport.de/)
-  (Deutsches Verwaltungsdiensteverzeichnis), scoped to the
-  `extern/standaloneauth/directory` entry path. Look up authorities,
+  (Deutsches Verwaltungsdiensteverzeichnis), with a configurable entry path
+  (default `extern/standaloneauth/directory`). Look up authorities,
   categories, certificates and service descriptions.
 - **`osci`** — speaks **OSCI** (Governikus osci-bibliothek) in both shapes:
   synchronous request/response (XMeld Personensuche against a Meldebehörde,
@@ -311,11 +311,14 @@ cert once and keep it for the lifetime of the client.
 ### Configuration
 
 ```scala
-import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig}
+import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig, DvdvEntryPath}
 import scala.concurrent.duration.*
 
 val config = DvdvConfig(
   baseUri          = uri"https://your-dvdv-betreiber.example",
+  entryPath        = DvdvEntryPath.StandaloneAuth,
+                                      // or InternDirectory (unauthenticated, no cert needed)
+                                      // or BundesmasterAuth (bring your own IAM auth)
   certSource       = Some(CertSource.Pkcs12(p12Path, password)),
                                       // omit entirely when using CertManager + CertAlias
 

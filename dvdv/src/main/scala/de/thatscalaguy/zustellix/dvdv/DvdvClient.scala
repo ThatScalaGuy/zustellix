@@ -10,13 +10,15 @@ import fs2.io.net.Network
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.client.Client
 
-/** Tagless-final algebra for the DVDV2 v2 directory API
- *  (entry path `extern/standaloneauth/directory`).
+/** Tagless-final algebra for the DVDV2 v2 directory API. The entry path is
+ *  configurable via [[DvdvConfig.entryPath]] (default
+ *  `extern/standaloneauth/directory`, see [[DvdvEntryPath]]).
  *
- *  The configured client certificate is used exclusively to sign the
- *  `client_assertion` JWT (RS256). It is NOT installed as a TLS client
- *  certificate — the DVDV2 protocol verifies cert possession via the
- *  signed JWT, not via mTLS.
+ *  With [[DvdvEntryPath.StandaloneAuth]], the configured client certificate
+ *  is used exclusively to sign the `client_assertion` JWT (RS256). It is NOT
+ *  installed as a TLS client certificate — the DVDV2 protocol verifies cert
+ *  possession via the signed JWT, not via mTLS. The unauthenticated entry
+ *  paths need no cert at all.
  */
 trait DvdvClient[F[_]] {
 
@@ -55,9 +57,9 @@ object DvdvClient {
    */
   def resource[F[_]: Async: Network](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
-      loaded <- Resource.eval(loadConfigured[F](config))
-      http   <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
-      client <- assemble[F](config, http, Async[F].pure(loaded))
+      resolve <- Resource.eval(configuredResolve[F](config))
+      http    <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
+      client  <- assemble[F](config, http, resolve)
     } yield client
 
   /** Build a DvdvClient whose signing cert is resolved from the shared
@@ -83,7 +85,7 @@ object DvdvClient {
    *  Useful for testing or when the caller wants to control the HTTP backend.
    */
   def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
-    Resource.eval(loadConfigured[F](config)).flatMap(loaded => assemble[F](config, http, Async[F].pure(loaded)))
+    Resource.eval(configuredResolve[F](config)).flatMap(resolve => assemble[F](config, http, resolve))
 
   /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. Like the
    *  [[resource]] overload, the cert is re-resolved on every token refresh so
@@ -96,6 +98,19 @@ object DvdvClient {
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
     Resource.eval(certs.loadedCert(alias)).flatMap(_ => assemble[F](config, http, certs.loadedCert(alias)))
+
+  /** The cert-resolution effect for [[assemble]], shaped by the entry path.
+   *  For [[DvdvEntryPath.StandaloneAuth]] the cert is loaded eagerly (fail
+   *  fast on a missing/broken `certSource`) and the resolve step just returns
+   *  it. For the unauthenticated entry paths no token manager is built, so
+   *  the (never-run) resolve step is deferred and no `certSource` is
+   *  required.
+   */
+  private def configuredResolve[F[_]: Sync](config: DvdvConfig): F[F[LoadedCert]] =
+    if (config.entryPath.usesStandaloneToken)
+      loadConfigured[F](config).map(loaded => Sync[F].pure(loaded))
+    else
+      Sync[F].pure(loadConfigured[F](config))
 
   private def loadConfigured[F[_]: Sync](config: DvdvConfig): F[LoadedCert] =
     config.certSource match {
@@ -116,14 +131,18 @@ object DvdvClient {
     for {
       handle   <- Resource.eval(FailoverClient.make[F](config.servers, config.recoverAfter))
       failover  = handle.middleware(http)
-      tokenEp   = handle.activeServer.map(config.tokenUriFor)
-      // An explicit tokenEndpoint is an exact wire target — routing it through
-      // the failover middleware would rewrite its authority to a directory
-      // server, so token POSTs go straight to the underlying client instead.
-      tokenHttp = if (config.tokenEndpoint.isDefined) http else failover
-      tokenMgr <- Resource.eval(TokenManager.make[F](tokenHttp, config, resolve, tokenEp))
-      authed    = AuthMiddleware(tokenMgr)(failover)
-      raw       = HttpDvdvClient[F](authed, config)
+      directory <- if (config.entryPath.usesStandaloneToken) {
+                     val tokenEp = handle.activeServer.map(config.tokenUriFor)
+                     // An explicit tokenEndpoint is an exact wire target — routing it
+                     // through the failover middleware would rewrite its authority to a
+                     // directory server, so token POSTs go straight to the underlying
+                     // client instead.
+                     val tokenHttp = if (config.tokenEndpoint.isDefined) http else failover
+                     Resource
+                       .eval(TokenManager.make[F](tokenHttp, config, resolve, tokenEp))
+                       .map(tokenMgr => AuthMiddleware(tokenMgr)(failover))
+                   } else Resource.pure[F, Client[F]](failover)
+      raw       = HttpDvdvClient[F](directory, config)
       cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
     } yield cached
 }
