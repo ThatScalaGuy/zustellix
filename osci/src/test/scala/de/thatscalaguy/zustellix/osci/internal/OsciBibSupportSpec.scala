@@ -186,7 +186,8 @@ class OsciBibSupportSpec extends FunSuite {
     cc.addContent(new Content("<xml>plain</xml>"))
     // A decrypt attempt on this bogus entry would throw — proving it is not touched.
     val out = extractVerifiedXml(
-      Array(cc), Array.empty[EncryptedDataOSCI], role, ContentSignaturePolicy.Warn, None
+      Array(cc), Array[EncryptedDataOSCI](new EncryptedDataOSCI(new ContentContainer())),
+      role, ContentSignaturePolicy.Warn, None
     )
     assertEquals(out, Some(("<xml>plain</xml>", ContentSignatureStatus.Unsigned)))
   }
@@ -242,6 +243,65 @@ class OsciBibSupportSpec extends FunSuite {
       null, Array[EncryptedDataOSCI](enc), signingRole, ContentSignaturePolicy.Require, None
     )
     assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml skips an undecryptable entry and decrypts a later one") {
+    val signed = new ContentContainer()
+    signed.addContent(new Content("<xml>later</xml>"))
+    signed.sign(signingRole)
+    // A locally built entry carries no EncryptedKey for our role, so its
+    // decrypt throws — the genuine library failure mode.
+    val bad = new EncryptedDataOSCI(new ContentContainer())
+    val good = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer = signed
+    }
+    val out = extractVerifiedXml(
+      null, Array[EncryptedDataOSCI](bad, good), signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>later</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml: when every encrypted entry fails to decrypt, the first failure is raised") {
+    val bad1 = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        throw new IllegalArgumentException("first")
+    }
+    val bad2 = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        throw new IllegalArgumentException("second")
+    }
+    val e = intercept[IllegalArgumentException] {
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](bad1, bad2), role, ContentSignaturePolicy.Warn, None
+      )
+    }
+    assertEquals(e.getMessage, "first")
+  }
+
+  test("extractVerifiedXml: a failing entry beside a decryptable-but-empty one yields None, not a raise") {
+    val bad = new EncryptedDataOSCI(new ContentContainer())
+    val empty = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        new ContentContainer()
+    }
+    assertEquals(
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](bad, empty), role, ContentSignaturePolicy.Warn, None
+      ),
+      None
+    )
+  }
+
+  test("extractVerifiedXml: decrypt returning null is tolerated and yields None") {
+    val nullEntry = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer = null
+    }
+    assertEquals(
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](nullEntry), role, ContentSignaturePolicy.Warn, None
+      ),
+      None
+    )
   }
 
   test("extractVerifiedXml: a corrupted signature raises InvalidContentSignature") {

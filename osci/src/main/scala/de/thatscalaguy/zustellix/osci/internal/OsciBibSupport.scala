@@ -15,7 +15,7 @@ import de.osci.osci12.roles.{Addressee, Originator, Role}
 
 import java.security.GeneralSecurityException
 import java.time.{Instant, OffsetDateTime}
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
 /** Helpers shared by the OSCI bridges (outbound and mailbox). Feedback and
@@ -80,9 +80,15 @@ private[osci] object OsciBibSupport {
    *  plaintext containers are tried first, then the `EncryptedDataOSCI`
    *  entries are decrypted with `decryptWith` (the role carrying our own
    *  Decrypter — payloads addressed to us are encrypted to our cipher cert).
-   *  The container the returned xml came from is checked via
-   *  [[verifyContentSignature]] — the dialog default only verifies the
-   *  intermediary envelope signature, not the author's content signature.
+   *  Each encrypted entry is tried independently: an entry that fails to
+   *  decrypt (e.g. it carries no EncryptedKey for our role) does not stop a
+   *  later entry from being tried. If encrypted entries exist and none
+   *  decrypts, the first decrypt failure is rethrown — via [[toOsciError]]
+   *  at the bridges' catch sites — so a genuinely wrong key is not masked
+   *  as an absent message (`NoSuchMessage`). The container the returned xml
+   *  came from is checked via [[verifyContentSignature]] — the dialog
+   *  default only verifies the intermediary envelope signature, not the
+   *  author's content signature.
    */
   def extractVerifiedXml(
       plain:       Array[ContentContainer],
@@ -93,8 +99,12 @@ private[osci] object OsciBibSupport {
   ): Option[(String, ContentSignatureStatus)] =
     firstContent(Option(plain).map(_.toList).getOrElse(Nil))
       .orElse {
-        val enc = Option(encrypted).map(_.toList).getOrElse(Nil)
-        firstContent(enc.flatMap(e => Option(e.decrypt(decryptWith))))
+        val enc       = Option(encrypted).map(_.toList).getOrElse(Nil)
+        val attempts  = enc.map(e => Try(Option(e.decrypt(decryptWith))))
+        val decrypted = attempts.collect { case Success(Some(cc)) => cc }
+        if enc.nonEmpty && decrypted.isEmpty then
+          attempts.collectFirst { case Failure(e) => e }.foreach(e => throw e)
+        firstContent(decrypted)
       }
       .map { case (cc, xml) => (xml, verifyContentSignature(cc, policy, messageId)) }
 
