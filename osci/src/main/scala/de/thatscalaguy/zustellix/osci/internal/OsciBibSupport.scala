@@ -46,16 +46,23 @@ private[osci] object OsciBibSupport {
     }
 
   /** Warning-class (`3xxx`) feedback entries, deduplicated by code — the
-   *  intermediary usually repeats the same code once per requested language.
+   *  intermediary usually repeats the same code once per requested language
+   *  (rows are `[lang, code, text]`). Per code the `preferredLang` row wins;
+   *  when that language is absent for a code, its first row is kept. Output
+   *  order is first occurrence per code.
    */
-  def feedbackWarnings(fb: Array[Array[String]]): List[OsciFeedback] =
-    feedbackRows(fb)
-      .collect {
-        case row if row.length >= 2 && row(1) != null && row(1).startsWith("3") =>
-          val text = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
-          OsciFeedback(row(1), text)
-      }
-      .distinctBy(_.code)
+  def feedbackWarnings(
+      fb: Array[Array[String]],
+      preferredLang: String = "de"
+  ): List[OsciFeedback] = {
+    val warnings =
+      feedbackRows(fb).filter(row => row.length >= 2 && row(1) != null && row(1).startsWith("3"))
+    warnings.distinctBy(_(1)).map { first =>
+      val row  = warnings.find(r => r(1) == first(1) && r(0) == preferredLang).getOrElse(first)
+      val text = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
+      OsciFeedback(row(1), text)
+    }
+  }
 
   /** The message id a FetchDelivery response is answering for. Null means the
    *  response carried no MessageId element — fall back to the requested id. A

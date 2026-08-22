@@ -8,6 +8,15 @@ import org.typelevel.log4cats.LoggerFactory
 trait OsciFacade[F[_]] {
   def request(tenant: TenantId, ags: Ags, xml: String): F[OsciResponse]
   def send(tenant: TenantId, ags: Ags, xml: String): F[OsciReceipt]
+
+  /** Every tenant the underlying registry knows ([[TenantRegistry.list]]). */
+  def tenants: F[Set[TenantId]]
+
+  /** The tenant's [[OsciMailbox]] — run `pending` / `fetch` / `drain` against
+   *  it. Raises [[OsciError.UnknownTenant]] when the registry holds no
+   *  mailbox for the tenant.
+   */
+  def mailbox(tenant: TenantId): F[OsciMailbox[F]]
 }
 
 object OsciFacade {
@@ -25,6 +34,11 @@ object OsciFacade {
    *  Needs a `LoggerFactory[F]` in scope, like `OsciClient.resource` — a
    *  failing [[LaufzettelSink]] is logged at warn instead of failing the
    *  operation.
+   *
+   *  The built registry registers no mailboxes ([[ConfigSource]] carries
+   *  only client configs), so [[OsciFacade.mailbox]] raises
+   *  [[OsciError.UnknownTenant]] — to dispatch mailboxes, build via
+   *  [[fromRegistry]] with `TenantRegistry.inMemory(clients, mailboxes)`.
    */
   def fromConfigs[F[_]: Async: LoggerFactory](
       src:    ConfigSource[F],

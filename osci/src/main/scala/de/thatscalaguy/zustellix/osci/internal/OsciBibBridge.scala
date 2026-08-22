@@ -17,6 +17,10 @@ import java.security.{GeneralSecurityException, Security}
 
 private[osci] object OsciBibBridge {
 
+  /** Both `resource` overloads deliberately attach no finalizer:
+   *  osci-bibliothek holds no long-lived connections — every operation opens
+   *  its own dialog over `transport` — so there is nothing to release.
+   */
   def resource[F[_]: Sync](
       certSource: CertSource,
       transport:  TransportI,

@@ -931,7 +931,20 @@ whole facade with an `OsciError.TenantInitFailed` naming that tenant — there
 is no partial boot.
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
-per tenant cert/intermediary.
+per tenant cert/intermediary. Register them beside the clients to dispatch
+them through the facade too — `facade.tenants` then lists every registered
+tenant and `facade.mailbox(tenant)` yields the tenant's mailbox
+(`pending` / `fetch` / `drain`):
+
+```scala
+val registry = TenantRegistry.inMemory[IO](clientsByTenant, mailboxesByTenant)
+val facade   = OsciFacade.fromRegistry[IO](registry)
+
+facade.mailbox(TenantId("kiel")).flatMap(_.drain(maxMessages = 10))
+```
+
+(`fromConfigs` registers no mailboxes — the properties file carries only
+client configs — so `facade.mailbox` there raises `OsciError.UnknownTenant`.)
 
 ### Shared certificates by alias
 

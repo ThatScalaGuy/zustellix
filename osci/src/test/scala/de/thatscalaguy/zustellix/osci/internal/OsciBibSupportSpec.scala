@@ -194,6 +194,43 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(feedbackWarnings(Array.empty[Array[String]]), Nil)
   }
 
+  test("feedbackWarnings prefers the German row of a code even when it is not first") {
+    val fb = Array(
+      Array("en", "3802", "Signature of the recipient is missing"),
+      Array("de", "3802", "Signatur des Empfängers fehlt"),
+      Array("en", "3500", "Certificate not valid in time")
+    )
+    assertEquals(
+      feedbackWarnings(fb),
+      List(
+        OsciFeedback("3802", "Signatur des Empfängers fehlt"),
+        OsciFeedback("3500", "Certificate not valid in time")
+      )
+    )
+  }
+
+  test("feedbackWarnings keeps a code's first row when the preferred language is absent") {
+    val fb = Array(
+      Array("en", "3802", "Signature of the recipient is missing"),
+      Array("fr", "3802", "La signature du destinataire est absente")
+    )
+    assertEquals(
+      feedbackWarnings(fb),
+      List(OsciFeedback("3802", "Signature of the recipient is missing"))
+    )
+  }
+
+  test("feedbackWarnings honours a caller-supplied preferred language") {
+    val fb = Array(
+      Array("de", "3802", "Signatur des Empfängers fehlt"),
+      Array("en", "3802", "Signature of the recipient is missing")
+    )
+    assertEquals(
+      feedbackWarnings(fb, preferredLang = "en"),
+      List(OsciFeedback("3802", "Signature of the recipient is missing"))
+    )
+  }
+
   test("firstContentData returns the first non-empty content payload") {
     val cc = new ContentContainer()
     cc.addContent(new Content("<xml>hello</xml>"))
