@@ -1,14 +1,19 @@
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{Async, Resource, Sync}
+import cats.effect.syntax.all.*
 import cats.syntax.functor.*
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
 import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
 import de.thatscalaguy.zustellix.dvdv.model.*
 import fs2.io.net.Network
+import org.http4s.Response
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.client.Client
+import org.typelevel.log4cats.LoggerFactory
+
+import java.util.concurrent.TimeoutException
 
 /** Tagless-final algebra for the DVDV2 v2 directory API. The entry path is
  *  configurable via [[DvdvConfig.entryPath]] (default
@@ -88,8 +93,11 @@ object DvdvClient {
 
   /** Build a fully-wired DvdvClient for a single tenant.
    *  Token + caches are scoped to this resource — each tenant gets its own.
+   *
+   *  All constructors need a `LoggerFactory[F]` in scope for the auth layer's
+   *  warnings — e.g. log4cats' `Slf4jFactory`, or `NoOpFactory` in tests.
    */
-  def resource[F[_]: Async: Network](config: DvdvConfig): Resource[F, DvdvClient[F]] =
+  def resource[F[_]: Async: Network: LoggerFactory](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
       resolve <- Resource.eval(configuredResolve[F](config))
       http    <- EmberClientBuilder.default[F].withTimeout(config.requestTimeout).build
@@ -104,7 +112,7 @@ object DvdvClient {
    *  and again on every token refresh — so a cert rotated in the manager (e.g.
    *  a hot-reloading `DirectoryCertManager`) is picked up without a restart.
    */
-  def resource[F[_]: Async: Network](
+  def resource[F[_]: Async: Network: LoggerFactory](
       config: DvdvConfig,
       certs:  CertManager[F],
       alias:  CertAlias
@@ -117,21 +125,31 @@ object DvdvClient {
 
   /** Build a DvdvClient over a caller-provided http4s Client.
    *  Useful for testing or when the caller wants to control the HTTP backend.
+   *
+   *  [[DvdvConfig.requestTimeout]] is applied per request attempt around the
+   *  provided client, mirroring the Ember overloads — callers whose client
+   *  already carries its own timeout should set `requestTimeout` accordingly.
    */
-  def fromClient[F[_]: Async](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
-    Resource.eval(configuredResolve[F](config)).flatMap(resolve => assemble[F](config, http, resolve))
+  def fromClient[F[_]: Async: LoggerFactory](config: DvdvConfig, http: Client[F]): Resource[F, DvdvClient[F]] =
+    Resource
+      .eval(configuredResolve[F](config))
+      .flatMap(resolve => assemble[F](config, applyRequestTimeout(config, http), resolve))
 
   /** [[fromClient]] with the signing cert resolved by [[CertAlias]]. Like the
    *  [[resource]] overload, the cert is re-resolved on every token refresh so
    *  rotations in the [[CertManager]] take effect without a rebuild.
+   *  [[DvdvConfig.requestTimeout]] is applied per request attempt around the
+   *  provided client.
    */
-  def fromClient[F[_]: Async](
+  def fromClient[F[_]: Async: LoggerFactory](
       config: DvdvConfig,
       http:   Client[F],
       certs:  CertManager[F],
       alias:  CertAlias
   ): Resource[F, DvdvClient[F]] =
-    Resource.eval(certs.loadedCert(alias)).flatMap(_ => assemble[F](config, http, certs.loadedCert(alias)))
+    Resource
+      .eval(certs.loadedCert(alias))
+      .flatMap(_ => assemble[F](config, applyRequestTimeout(config, http), certs.loadedCert(alias)))
 
   /** The cert-resolution effect for [[assemble]], shaped by the entry path.
    *  For [[DvdvEntryPath.StandaloneAuth]] the cert is loaded eagerly (fail
@@ -157,7 +175,27 @@ object DvdvClient {
         )
     }
 
-  private def assemble[F[_]: Async](
+  /** Applies [[DvdvConfig.requestTimeout]] to each request attempt of a
+   *  caller-provided client, mirroring the Ember overloads' `withTimeout`.
+   *  http4s ships no client-side Timeout middleware, so this is hand-rolled:
+   *  the timeout bounds acquisition of the response (like Ember's request
+   *  timeout) and raises `java.util.concurrent.TimeoutException`. It sits
+   *  beneath the failover middleware, so every failover attempt gets its own
+   *  timeout budget.
+   */
+  private def applyRequestTimeout[F[_]: Async](config: DvdvConfig, http: Client[F]): Client[F] =
+    Client[F] { req =>
+      http
+        .run(req)
+        .timeoutTo(
+          config.requestTimeout,
+          Resource.raiseError[F, Response[F], Throwable](
+            new TimeoutException(s"DVDV request timed out after ${config.requestTimeout}: ${req.method} ${req.uri}")
+          )
+        )
+    }
+
+  private def assemble[F[_]: Async: LoggerFactory](
       config:  DvdvConfig,
       http:    Client[F],
       resolve: F[LoadedCert]
@@ -177,6 +215,6 @@ object DvdvClient {
                        .map(tokenMgr => AuthMiddleware(tokenMgr)(failover))
                    } else Resource.pure[F, Client[F]](failover)
       raw       = HttpDvdvClient[F](directory, config)
-      cached   <- Resource.eval(CachedDvdvClient.make[F](raw, config.cacheConfig))
+      cached   <- CachedDvdvClient.make[F](raw, config.cacheConfig)
     } yield cached
 }

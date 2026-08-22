@@ -13,10 +13,11 @@ import de.thatscalaguy.zustellix.osci.{
   OsciResponse,
   TenantId
 }
+import org.typelevel.log4cats.LoggerFactory
 
 import java.net.URI
 
-private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
+private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
     tenantId:  TenantId,
     subject:   String,
     transport: OsciTransport[F],
@@ -24,6 +25,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
     sink:      LaufzettelSink[F],
     capturePayloads: Boolean = false
 ) extends OsciClient[F] {
+
+  private val log = LoggerFactory[F].getLogger
 
   def request(ags: Ags, xml: String): F[OsciResponse] =
     for {
@@ -42,7 +45,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                   warnings     = result.warnings,
                   contentSignature = result.signature
                 )
-      _      <- sink.record(tenantId, lz).attempt.void
+      _      <- recordBestEffort(lz)
     }
     yield OsciResponse(
       xml       = result.responseXml,
@@ -67,9 +70,24 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
                    rawXml       = None, // async: no response payload at store time
                    warnings     = receipt.warnings
                  )
-      _       <- sink.record(tenantId, lz).attempt.void
+      _       <- recordBestEffort(lz)
     }
     yield receipt
+
+  /** Best-effort record: a sink failure is logged at warn and swallowed so it
+   *  never fails the operation nor masks an in-flight delivery error.
+   */
+  private def recordBestEffort(lz: Laufzettel): F[Unit] =
+    sink.record(tenantId, lz)
+      .onError { case e =>
+        log.warn(e)(
+          "LaufzettelSink.record failed — Laufzettel dropped " +
+            s"(tenant=${tenantId.value} ags=${lz.recipientAgs.value} " +
+            s"messageId=${lz.messageId} status=${lz.status.render})"
+        )
+      }
+      .attempt
+      .void
 
   /** Failed deliveries leave a Laufzettel too, so the audit trail is not
    *  success-only: `status` is `Feedback` with the OSCI code for a `9xxx`
@@ -77,8 +95,8 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
    *  from `GetMessageId` when one was issued before the failure ("" otherwise),
    *  `rawXml` stays `None`. `recipientUri` is the resolved addressee URI, or
    *  empty when the resolver itself failed. Recording is best-effort — the
-   *  original error is re-raised untouched, and a sink failure is swallowed
-   *  like on the success path.
+   *  original error is re-raised untouched, and a sink failure is logged at
+   *  warn and then swallowed like on the success path.
    */
   private def recordFailure(ags: Ags, uri: Option[URI], e: Throwable): F[Unit] =
     Clock[F].realTimeInstant.flatMap { now =>
@@ -90,7 +108,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock](
         status       = failureStatus(e),
         rawXml       = None
       )
-      sink.record(tenantId, lz).attempt.void
+      recordBestEffort(lz)
     }
 
   private def failureStatus(e: Throwable): LaufzettelStatus =

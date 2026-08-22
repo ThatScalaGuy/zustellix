@@ -31,6 +31,58 @@ class ResponseDecoderSpec extends CatsEffectSuite {
     }
   }
 
+  test("optional: 200 with Content-Length: 0 returns None") {
+    val resp = Response[IO](Status.Ok).withEntity("")
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+      assertEquals(r, None)
+    }
+  }
+
+  test("optional: 200 with an empty body and no Content-Length returns None") {
+    val resp = Response[IO](Status.Ok)
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+      assertEquals(r, None)
+    }
+  }
+
+  test("optional: 200 with a whitespace-only body returns None") {
+    val resp = Response[IO](Status.Ok).withEntity(" \n")
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+      assertEquals(r, None)
+    }
+  }
+
+  test("optional: 204 returns None") {
+    val resp = Response[IO](Status.NoContent)
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+      assertEquals(r, None)
+    }
+  }
+
+  test("optional: 404 returns None") {
+    val resp = Response[IO](Status.NotFound)
+    ResponseDecoder.optional[IO, List[String]]("findCertificateByFingerprint", resp).map { r =>
+      assertEquals(r, None)
+    }
+  }
+
+  test("optional: 200 with a decodable body returns Some") {
+    val resp = Response[IO](Status.Ok).withEntity("""["a","b"]""")
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+      assertEquals(r, Some(List("a", "b")))
+    }
+  }
+
+  test("required: 200 with an empty body raises DecodingError") {
+    val resp = Response[IO](Status.Ok)
+    ResponseDecoder.required[IO, List[String]]("version", resp).attempt.map {
+      case Left(DvdvError.DecodingError(endpoint, cause)) =>
+        assertEquals(endpoint, "version")
+        assert(clue(cause).getMessage.nonEmpty)
+      case other => fail(s"expected DecodingError, got $other")
+    }
+  }
+
   test("5xx with a Problem body carries Some(problem) and the raw body") {
     val problem = Problem(title = Some("down"), status = Some(503))
     val raw     = problem.asJson.noSpaces

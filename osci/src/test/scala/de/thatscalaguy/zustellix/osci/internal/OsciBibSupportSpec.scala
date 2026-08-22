@@ -8,6 +8,9 @@ import de.thatscalaguy.zustellix.osci.{
 }
 import munit.FunSuite
 
+import de.osci.osci12.OSCIException
+import de.osci.osci12.common.OSCIExceptionCodes.OSCIErrorCodes
+import de.osci.osci12.common.{OSCIErrorException, SoapClientException, SoapServerException}
 import de.osci.osci12.messageparts.{Content, ContentContainer, EncryptedDataOSCI, Timestamp}
 import de.osci.osci12.roles.Originator
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
@@ -139,6 +142,35 @@ class OsciBibSupportSpec extends FunSuite {
     assertEquals(topFeedbackCode(fb), "0800")
   }
 
+  // confirmMessageId guards the mailbox fetch: the FetchDelivery response
+  // must answer for the requested message id. The parser leaves the field
+  // null when the response carries no MessageId element — only that absence
+  // falls back to the requested id.
+
+  test("confirmMessageId falls back to the requested id when the response carries none (null)") {
+    assertEquals(confirmMessageId("msg-1", null), "msg-1")
+  }
+
+  test("confirmMessageId confirms a matching response id") {
+    assertEquals(confirmMessageId("msg-1", "msg-1"), "msg-1")
+  }
+
+  test("confirmMessageId: a different response id raises MessageIdMismatch carrying both ids") {
+    val e = interceptMessage[OsciError.MessageIdMismatch](
+      "FetchDelivery for messageId 'msg-1' returned a delivery with messageId 'msg-2'"
+    ) {
+      confirmMessageId("msg-1", "msg-2")
+    }
+    assertEquals(e.requested, "msg-1")
+    assertEquals(e.returned, "msg-2")
+  }
+
+  test("confirmMessageId treats an empty response id as a mismatch, not an absence") {
+    intercept[OsciError.MessageIdMismatch] {
+      confirmMessageId("msg-1", "")
+    }
+  }
+
   test("feedbackWarnings collects 3xxx rows and dedups per-language repeats") {
     val fb = Array(
       Array("de", "3802", "Signatur des Empfängers über die Annahme- bzw. Bearbeitungsantwort fehlt"),
@@ -183,7 +215,8 @@ class OsciBibSupportSpec extends FunSuite {
     cc.addContent(new Content("<xml>plain</xml>"))
     // A decrypt attempt on this bogus entry would throw — proving it is not touched.
     val out = extractVerifiedXml(
-      Array(cc), Array.empty[EncryptedDataOSCI], role, ContentSignaturePolicy.Warn, None
+      Array(cc), Array[EncryptedDataOSCI](new EncryptedDataOSCI(new ContentContainer())),
+      role, ContentSignaturePolicy.Warn, None
     )
     assertEquals(out, Some(("<xml>plain</xml>", ContentSignatureStatus.Unsigned)))
   }
@@ -225,10 +258,9 @@ class OsciBibSupportSpec extends FunSuite {
   }
 
   test("extractVerifiedXml verifies the signature of a decrypted container") {
-    // Decrypting a self-built EncryptedDataOSCI needs a wire roundtrip (the
-    // encrypted keys only land in the EncryptedData on serialization), so
     // decrypt is stubbed to return the signed container — what matters here
-    // is that the encrypted branch runs the same verification.
+    // is that the encrypted branch runs the same verification. The real
+    // decrypt of a serialized entry is covered by the roundtrip test below.
     val signed = new ContentContainer()
     signed.addContent(new Content("<xml>e2e</xml>"))
     signed.sign(signingRole)
@@ -239,6 +271,100 @@ class OsciBibSupportSpec extends FunSuite {
       null, Array[EncryptedDataOSCI](enc), signingRole, ContentSignaturePolicy.Require, None
     )
     assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  /** Serialize an encrypted entry and SAX-reparse it through the library's
+   *  public `EncryptedDataBuilder` — the shape a received message's entries
+   *  arrive in (the encrypted keys only land in the `EncryptedData` on
+   *  serialization). `writeXML(out, false)` emits the namespace declarations
+   *  the SOAP envelope would otherwise supply; the parse-side constructor
+   *  resolves the `EncryptedKey`'s RetrievalMethod ref-id against the
+   *  carrier message's roles, so `decryptWith` is registered there.
+   */
+  private def reparse(enc: EncryptedDataOSCI, decryptWith: Originator): EncryptedDataOSCI = {
+    val out = new java.io.ByteArrayOutputStream()
+    enc.writeXML(out, false)
+    val encData =
+      de.osci.osci12.encryption.EncryptedDataBuilder.createFromXmlBytes(out.toByteArray)
+    val msg = new de.osci.osci12.messagetypes.OSCIMessage() {}
+    msg.addRole(decryptWith)
+    new EncryptedDataOSCI(encData, msg)
+  }
+
+  test("extractVerifiedXml decrypts a real EncryptedDataOSCI encrypted for test-cert.p12") {
+    // The full cycle the mailbox performs on a fetched delivery: the sender
+    // signs and encrypts, the entry crosses the wire serialized, and the
+    // receiver decrypts with its own role and verifies the author's content
+    // signature on the decrypted container.
+    val container = new ContentContainer()
+    container.addContent(new Content("<xml>e2e</xml>"))
+    container.sign(signingRole)
+    val enc = new EncryptedDataOSCI(container)
+    enc.encrypt(signingRole)
+    val parsed = reparse(enc, signingRole)
+    val out = extractVerifiedXml(
+      null, Array[EncryptedDataOSCI](parsed), signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>e2e</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml skips an undecryptable entry and decrypts a later one") {
+    val signed = new ContentContainer()
+    signed.addContent(new Content("<xml>later</xml>"))
+    signed.sign(signingRole)
+    // A locally built entry carries no EncryptedKey for our role, so its
+    // decrypt throws — the genuine library failure mode.
+    val bad = new EncryptedDataOSCI(new ContentContainer())
+    val good = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer = signed
+    }
+    val out = extractVerifiedXml(
+      null, Array[EncryptedDataOSCI](bad, good), signingRole, ContentSignaturePolicy.Require, None
+    )
+    assertEquals(out, Some(("<xml>later</xml>", ContentSignatureStatus.Valid)))
+  }
+
+  test("extractVerifiedXml: when every encrypted entry fails to decrypt, the first failure is raised") {
+    val bad1 = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        throw new IllegalArgumentException("first")
+    }
+    val bad2 = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        throw new IllegalArgumentException("second")
+    }
+    val e = intercept[IllegalArgumentException] {
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](bad1, bad2), role, ContentSignaturePolicy.Warn, None
+      )
+    }
+    assertEquals(e.getMessage, "first")
+  }
+
+  test("extractVerifiedXml: a failing entry beside a decryptable-but-empty one yields None, not a raise") {
+    val bad = new EncryptedDataOSCI(new ContentContainer())
+    val empty = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer =
+        new ContentContainer()
+    }
+    assertEquals(
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](bad, empty), role, ContentSignaturePolicy.Warn, None
+      ),
+      None
+    )
+  }
+
+  test("extractVerifiedXml: decrypt returning null is tolerated and yields None") {
+    val nullEntry = new EncryptedDataOSCI(new ContentContainer()) {
+      override def decrypt(role: de.osci.osci12.roles.Role): ContentContainer = null
+    }
+    assertEquals(
+      extractVerifiedXml(
+        null, Array[EncryptedDataOSCI](nullEntry), role, ContentSignaturePolicy.Warn, None
+      ),
+      None
+    )
   }
 
   test("extractVerifiedXml: a corrupted signature raises InvalidContentSignature") {
@@ -273,6 +399,110 @@ class OsciBibSupportSpec extends FunSuite {
     )
   }
 
+  // withExplicitDialog is the explicit-dialog lifecycle of the bridges:
+  // InitDialog (whose response feedback is checked — a 9xxx refusal aborts
+  // before the body), body, best-effort ExitDialog. The thunk overload is
+  // the offline seam — a real InitDialog/ExitDialog send needs a parseable
+  // intermediary response and stays in the gated `OsciBibBridgeIT`.
+
+  test("withExplicitDialog runs init, body, exit in order and returns the body's result") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val out = withExplicitDialog(
+      () => { calls += "init"; Array(Array("de", "0801", "dialog ok")) },
+      () => { calls += "exit"; () }
+    ) {
+      calls += "body"
+      42
+    }
+    assertEquals(out, 42)
+    assertEquals(calls.toList, List("init", "body", "exit"))
+  }
+
+  test("withExplicitDialog checks the InitDialog response feedback: a 9xxx refusal raises OsciResponse and neither body nor exit runs") {
+    // 9802 = no explicit dialog — the intermediary refused to open one.
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(
+        () => Array(Array("de", "9802", "dialog refused")),
+        () => { calls += "exit"; () }
+      ) {
+        calls += "body"
+      }
+    }
+    assertEquals(e.code, "9802")
+    assertEquals(e.messageId, None)
+    assertEquals(calls.toList, Nil)
+  }
+
+  test("withExplicitDialog attaches the caller's messageId to an init refusal") {
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(
+        () => Array(Array("de", "9802", "dialog refused")),
+        () => (),
+        Some("msg-1")
+      )(42)
+    }
+    assertEquals(e.code, "9802")
+    assertEquals(e.messageId, Some("msg-1"))
+  }
+
+  test("withExplicitDialog: warning-class (3xxx) init feedback does not abort the dialog") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val out = withExplicitDialog(
+      () => Array(Array("de", "3802", "Signatur des Empfängers fehlt")),
+      () => { calls += "exit"; () }
+    )(42)
+    assertEquals(out, 42)
+    assertEquals(calls.toList, List("exit"))
+  }
+
+  test("withExplicitDialog still sends exit when the body raises, and the body's exception propagates") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(() => null, () => { calls += "exit"; () }) {
+        checkFeedback(Array(Array("de", "9000", "boom")), Some("msg-1"))
+      }
+    }
+    assertEquals(e.code, "9000")
+    assertEquals(e.messageId, Some("msg-1"))
+    assertEquals(calls.toList, List("exit"))
+  }
+
+  test("withExplicitDialog: a NonFatal exit failure is swallowed (best-effort cleanup)") {
+    val out = withExplicitDialog(() => null, () => throw new RuntimeException("exit boom"))(42)
+    assertEquals(out, 42)
+  }
+
+  test("withExplicitDialog: an exit failure does not mask the body's exception") {
+    val e = intercept[OsciError.OsciResponse] {
+      withExplicitDialog(() => null, () => throw new RuntimeException("exit boom")) {
+        throw OsciError.OsciResponse("9000", "delivery rejected", Some("msg-1"))
+      }
+    }
+    assertEquals(e.code, "9000")
+  }
+
+  test("withExplicitDialog: a failing init propagates and exit is not attempted") {
+    val calls = scala.collection.mutable.ListBuffer.empty[String]
+    intercept[RuntimeException] {
+      withExplicitDialog(() => throw new RuntimeException("init boom"), () => { calls += "exit"; () }) {
+        calls += "body"
+      }
+    }
+    assertEquals(calls.toList, Nil)
+  }
+
+  test("withExplicitDialog: a fatal exit exception is not swallowed") {
+    // munit's intercept itself only catches NonFatal, so catch by hand.
+    val propagated =
+      try {
+        withExplicitDialog(() => null, () => throw new InterruptedException())(42)
+        false
+      }
+      catch case _: InterruptedException => true
+    assert(propagated, "expected the fatal exit exception to propagate")
+  }
+
   test("parseInstant handles the offset xsd:dateTime form") {
     assertEquals(
       parseInstant("2026-05-13T12:00:00+02:00"),
@@ -293,5 +523,91 @@ class OsciBibSupportSpec extends FunSuite {
     val ts = new Timestamp(Timestamp.PROCESS_CARD_CREATION, null, "2026-05-13T12:00:00+02:00")
     assertEquals(parseTimestamp(ts), Some(Instant.parse("2026-05-13T10:00:00Z")))
     assertEquals(parseTimestamp(null), None)
+  }
+
+  // toOsciError maps every exception escaping an osci-bibliothek blocking
+  // body. SOAP faults (OSCIErrorException / SoapServerException) carry the
+  // same 9xxx codes as feedback rows and must surface them as OsciResponse.
+
+  test("toOsciError: OSCIErrorException surfaces its OSCI error code as OsciResponse") {
+    // NoExplicitDialog carries OSCI code 9802.
+    toOsciError(new OSCIErrorException(OSCIErrorCodes.NoExplicitDialog)) match {
+      case e: OsciError.OsciResponse =>
+        assertEquals(e.code, "9802")
+        assertEquals(e.messageId, None)
+      case other => fail(s"expected OsciResponse, got $other")
+    }
+  }
+
+  test("toOsciError: SoapServerException carries code and faultstring into OsciResponse") {
+    // InternalErrorSupplier carries OSCI code 9811.
+    val fault = new SoapServerException(OSCIErrorCodes.InternalErrorSupplier, "Interner Fehler des Intermediaers")
+    toOsciError(fault) match {
+      case e: OsciError.OsciResponse =>
+        assertEquals(e.code, "9811")
+        assertEquals(e.detail, "Interner Fehler des Intermediaers")
+        assertEquals(e.messageId, None)
+      case other => fail(s"expected OsciResponse, got $other")
+    }
+  }
+
+  test("toOsciError: other OSCIExceptions stay OsciTransport with the cause preserved") {
+    // SoapClientException is deliberately NOT an OsciResponse — the library
+    // also raises it for locally detected malformed responses.
+    val client = new SoapClientException(OSCIErrorCodes.SignatureInvalid, "kaputt")
+    toOsciError(client) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq client)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+    val bare = new OSCIException("9601")
+    toOsciError(bare) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq bare)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+  }
+
+  test("toOsciError: IllegalArgumentException maps to Config with the message as reason") {
+    toOsciError(new IllegalArgumentException("invalid firstargument: 0")) match {
+      case e: OsciError.Config => assertEquals(e.reason, "invalid firstargument: 0")
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError: IllegalStateException maps to Config") {
+    toOsciError(new IllegalStateException("dialog already closed")) match {
+      case e: OsciError.Config => assertEquals(e.reason, "dialog already closed")
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError: a message-less IllegalArgumentException still yields a non-empty Config reason") {
+    toOsciError(new IllegalArgumentException()) match {
+      case e: OsciError.Config => assert(e.reason.nonEmpty)
+      case other               => fail(s"expected Config, got $other")
+    }
+  }
+
+  test("toOsciError passes an OsciError through unchanged") {
+    val noSuch = OsciError.NoSuchMessage("m")
+    assert(toOsciError(noSuch) eq noSuch)
+    // In particular an OsciResponse raised by checkFeedback keeps its messageId.
+    val rsp = OsciError.OsciResponse("9000", "boom", Some("msg-1"))
+    assert(toOsciError(rsp) eq rsp)
+    // And a MessageIdMismatch raised by confirmMessageId is not re-wrapped.
+    val mm = OsciError.MessageIdMismatch("a", "b")
+    assert(toOsciError(mm) eq mm)
+  }
+
+  test("toOsciError: IOException stays OsciTransport, GeneralSecurityException maps to Certificate") {
+    val io = new java.io.IOException("connection reset")
+    toOsciError(io) match {
+      case e: OsciError.OsciTransport => assert(e.getCause eq io)
+      case other                      => fail(s"expected OsciTransport, got $other")
+    }
+    val gse = new java.security.GeneralSecurityException("bad key")
+    toOsciError(gse) match {
+      case e: OsciError.Certificate => assert(e.getCause eq gse)
+      case other                    => fail(s"expected Certificate, got $other")
+    }
   }
 }

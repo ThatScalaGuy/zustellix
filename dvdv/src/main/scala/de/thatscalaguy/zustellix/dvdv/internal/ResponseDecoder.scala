@@ -16,28 +16,30 @@ object ResponseDecoder {
       case _                        => raiseError[F, A](resp)
     }
 
-  def optional[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F], notFoundIs204: Boolean = true): F[Option[A]] =
+  def optional[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F]): F[Option[A]] =
     resp.status match {
-      case Status.Ok if resp.contentLength.forall(_ > 0L) =>
-        decodeBody[F, A](endpoint, resp).map(Some(_))
-      case Status.NoContent if notFoundIs204 =>
+      case Status.NoContent =>
         Concurrent[F].pure(None)
       case Status.NotFound =>
         // For findCertificateByFingerprint, 404 = not found (return None).
         // For other endpoints we surface NotFound — caller decides via .optional vs .required.
         Concurrent[F].pure(None)
       case s if s.code >= 200 && s.code < 300 =>
-        decodeBody[F, A](endpoint, resp).map(Some(_))
+        resp.bodyText.compile.string.flatMap { body =>
+          if (body.isBlank) Concurrent[F].pure(None)
+          else decodeString[F, A](endpoint, body).map(Some(_))
+        }
       case _ =>
         raiseError[F, Option[A]](resp)
     }
 
   private def decodeBody[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F]): F[A] =
-    resp.bodyText.compile.string.flatMap { s =>
-      Concurrent[F].fromEither(
-        decode[A](s).left.map(e => DvdvError.DecodingError(endpoint, e))
-      )
-    }
+    resp.bodyText.compile.string.flatMap(decodeString[F, A](endpoint, _))
+
+  private def decodeString[F[_]: Concurrent, A: Decoder](endpoint: String, s: String): F[A] =
+    Concurrent[F].fromEither(
+      decode[A](s).left.map(e => DvdvError.DecodingError(endpoint, e))
+    )
 
   private def raiseError[F[_]: Concurrent, A](resp: Response[F]): F[A] =
     resp.bodyText.compile.string.flatMap { body =>

@@ -3,11 +3,16 @@ package de.thatscalaguy.zustellix.osci.internal
 import cats.effect.{IO, Ref}
 import de.thatscalaguy.zustellix.osci.*
 import munit.CatsEffectSuite
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
+import org.typelevel.log4cats.testing.TestingLoggerFactory
 
 import java.net.URI
 import java.security.cert.X509Certificate
 
 class OsciClientImplSpec extends CatsEffectSuite {
+
+  private given LoggerFactory[IO] = NoOpFactory[IO]
 
   private val TestAgs = Ags.unsafe("01001000")
   private val NopeAgs = Ags.unsafe("99999999")
@@ -56,6 +61,22 @@ class OsciClientImplSpec extends CatsEffectSuite {
     def record(tenant: TenantId, l: Laufzettel): IO[Unit] =
       IO.raiseError(new RuntimeException("sink down"))
   }
+
+  /** An impl over the given `LoggerFactory` (the method-local given shadows
+   *  the class-level `NoOpFactory`), so tests can observe the warn logs.
+   */
+  private def mkImpl(
+      transport: OsciTransport[IO],
+      resolver: AgsResolver[IO],
+      sink: LaufzettelSink[IO],
+      lf: LoggerFactory[IO]
+  ): OsciClientImpl[IO] = {
+    given LoggerFactory[IO] = lf
+    new OsciClientImpl[IO](TenantId("alice"), "XMeld", transport, resolver, sink)
+  }
+
+  private def warns(lf: TestingLoggerFactory[IO]): IO[Vector[TestingLoggerFactory.Warn]] =
+    lf.logged.map(_.collect { case w: TestingLoggerFactory.Warn => w })
 
   test("happy path returns the response and records a Laufzettel") {
     val raw = OsciRawResult(Some("<resp/>"), "msg-1", "OK")
@@ -415,5 +436,64 @@ class OsciClientImplSpec extends CatsEffectSuite {
       failingSink
     )
     impl.send(TestAgs, "<req/>").assertEquals(receipt)
+  }
+
+  test("request: a sink failure is logged at warn and does not fail the request") {
+    val raw = OsciRawResult(Some("<resp/>"), "m", "OK")
+    for {
+      lf  <- TestingLoggerFactory.ref[IO]()
+      impl = mkImpl(fixedTransport(raw), fixedResolver(Route), failingSink, lf)
+      out <- impl.request(TestAgs, "<req/>")
+      ws  <- warns(lf)
+    }
+    yield {
+      assertEquals(out, OsciResponse(Some("<resp/>"), "m", "OK"))
+      assertEquals(ws.size, 1)
+      assert(ws.head.message.contains("tenant=alice"), ws.head.message)
+      assert(ws.head.message.contains("messageId=m"), ws.head.message)
+      assertEquals(ws.head.throwOpt.map(_.getMessage), Some("sink down"))
+    }
+  }
+
+  test("send: a sink failure is logged at warn and does not fail the send") {
+    val receipt = OsciReceipt("m", "0800", None)
+    for {
+      lf  <- TestingLoggerFactory.ref[IO]()
+      impl = mkImpl(fixedStoreTransport(receipt), fixedResolver(Route), failingSink, lf)
+      out <- impl.send(TestAgs, "<req/>")
+      ws  <- warns(lf)
+    }
+    yield {
+      assertEquals(out, receipt)
+      assertEquals(ws.size, 1)
+      assertEquals(ws.head.throwOpt.map(_.getMessage), Some("sink down"))
+    }
+  }
+
+  test("request: a sink failure while recording a failure Laufzettel is logged and does not mask the original error") {
+    val err = OsciError.OsciTransport(new java.io.IOException("net"))
+    for {
+      lf  <- TestingLoggerFactory.ref[IO]()
+      impl = mkImpl(failingTransport(err), fixedResolver(Route), failingSink, lf)
+      out <- impl.request(TestAgs, "<x/>").attempt
+      ws  <- warns(lf)
+    }
+    yield {
+      assertEquals(out, Left(err))
+      assertEquals(ws.size, 1)
+      assertEquals(ws.head.throwOpt.map(_.getMessage), Some("sink down"))
+    }
+  }
+
+  test("a successful sink logs no warnings") {
+    val raw = OsciRawResult(Some("<resp/>"), "m", "OK")
+    for {
+      lf  <- TestingLoggerFactory.ref[IO]()
+      ref <- Ref.of[IO, Vector[Laufzettel]](Vector.empty)
+      impl = mkImpl(fixedTransport(raw), fixedResolver(Route), recordingSink(ref), lf)
+      _   <- impl.request(TestAgs, "<req/>")
+      ws  <- warns(lf)
+    }
+    yield assertEquals(ws, Vector.empty)
   }
 }

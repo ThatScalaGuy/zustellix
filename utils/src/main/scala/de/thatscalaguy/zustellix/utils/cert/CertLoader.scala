@@ -3,6 +3,7 @@ package de.thatscalaguy.zustellix.utils.cert
 import cats.effect.Sync
 
 import java.io.{ByteArrayInputStream, InputStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.cert.{CertificateFactory, X509Certificate}
 import java.security.{KeyStore, MessageDigest, PrivateKey}
@@ -35,6 +36,12 @@ object CertLoader {
     case CertSource.PemBytes(c, k, p)            => loadPemBytes[F](c, k, p)
   }
 
+  /** Loads a PKCS12 keystore that contains exactly one private-key entry with a
+   *  certificate; fails with [[IllegalArgumentException]] when none or several
+   *  exist. `password` opens both the store and the key entry — the layout
+   *  produced by `openssl pkcs12 -export` and Java keytool; keystores whose
+   *  entry password differs from the store password are not supported.
+   */
   def loadPkcs12Bytes[F[_]: Sync](bytes: Array[Byte], password: String): F[LoadedCert] =
     Sync[F].blocking(fromKeyStoreStream(new ByteArrayInputStream(bytes), password))
 
@@ -49,12 +56,28 @@ object CertLoader {
     val ks = KeyStore.getInstance("PKCS12")
     ks.load(in, password.toCharArray)
 
-    val alias = ks.aliases().asScala.find(ks.isKeyEntry).getOrElse(
-      throw new IllegalArgumentException("No key entry found in PKCS12 keystore")
-    )
+    // PrivateKeyEntry (never a SecretKeyEntry or trusted cert) with a stable
+    // choice: enumeration order is unspecified, so require exactly one match.
+    val keyAliases = ks
+      .aliases()
+      .asScala
+      .toList
+      .filter(a => ks.entryInstanceOf(a, classOf[KeyStore.PrivateKeyEntry]))
+      .sorted
+    val alias = keyAliases match {
+      case Nil =>
+        throw new IllegalArgumentException("No private key entry with a certificate found in PKCS12 keystore")
+      case single :: Nil => single
+      case many =>
+        throw new IllegalArgumentException(
+          s"Multiple private key entries found in PKCS12 keystore (${many.mkString(", ")}); expected exactly one"
+        )
+    }
 
-    val pk   = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
-    val cert = ks.getCertificate(alias).asInstanceOf[X509Certificate]
+    val pk = ks.getKey(alias, password.toCharArray).asInstanceOf[PrivateKey]
+    val cert = Option(ks.getCertificate(alias))
+      .getOrElse(throw new IllegalArgumentException(s"PKCS12 key entry '$alias' has no certificate"))
+      .asInstanceOf[X509Certificate]
     val chain = Option(ks.getCertificateChain(alias))
       .map(_.toList.map(_.asInstanceOf[X509Certificate]))
       .filter(_.nonEmpty)
@@ -102,13 +125,21 @@ object CertLoader {
     import org.bouncycastle.openssl.jcajce.{JcaPEMKeyConverter, JcePEMDecryptorProviderBuilder, JceOpenSSLPKCS8DecryptorProviderBuilder}
     import org.bouncycastle.pkcs.{PKCS8EncryptedPrivateKeyInfo}
     import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
+    import org.bouncycastle.asn1.ASN1ObjectIdentifier
+    import org.bouncycastle.asn1.x9.X9ECParameters
+    import org.bouncycastle.cert.X509CertificateHolder
 
-    val reader = new java.io.InputStreamReader(new ByteArrayInputStream(keyBytes))
+    val reader = new java.io.InputStreamReader(new ByteArrayInputStream(keyBytes), StandardCharsets.UTF_8)
     val parser = new PEMParser(reader)
     try {
-      val obj      = parser.readObject()
       val converter = new JcaPEMKeyConverter().setProvider(bcProvider)
-      obj match {
+      // Non-key blocks before the key are skipped: `openssl ecparam -genkey`
+      // emits an EC PARAMETERS block ahead of the key, and combined PEM bundles
+      // may place certificates first.
+      @annotation.tailrec
+      def nextKey(): PrivateKey = parser.readObject() match {
+        case null =>
+          throw new IllegalArgumentException(s"No private key found in PEM input at $keyLabel")
         case kp: PEMKeyPair =>
           converter.getKeyPair(kp).getPrivate
         case enc: PEMEncryptedKeyPair =>
@@ -125,11 +156,14 @@ object CertLoader {
           converter.getPrivateKey(enc.decryptPrivateKeyInfo(decryptor))
         case info: PrivateKeyInfo =>
           converter.getPrivateKey(info)
+        case _: ASN1ObjectIdentifier | _: X9ECParameters | _: X509CertificateHolder =>
+          nextKey()
         case other =>
           throw new IllegalArgumentException(
-            s"Unsupported PEM object at $keyLabel: ${Option(other).map(_.getClass.getName).getOrElse("null")}"
+            s"Unsupported PEM object at $keyLabel: ${other.getClass.getName}"
           )
       }
+      nextKey()
     } finally {
       parser.close()
       reader.close()

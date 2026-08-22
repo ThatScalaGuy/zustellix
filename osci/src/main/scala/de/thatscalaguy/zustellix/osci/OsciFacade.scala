@@ -3,6 +3,7 @@ package de.thatscalaguy.zustellix.osci
 import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
+import org.typelevel.log4cats.LoggerFactory
 
 trait OsciFacade[F[_]] {
   def request(tenant: TenantId, ags: Ags, xml: String): F[OsciResponse]
@@ -14,8 +15,18 @@ object OsciFacade {
   /** Build a multi-tenant facade. One [[OsciClient]] is constructed per
    *  tenant config. `dvdvFor` returns the DvdvClient to use for a given
    *  tenant; the caller owns those clients' lifetimes.
+   *
+   *  Boot is all-or-nothing: every tenant client is built eagerly when the
+   *  resource is acquired, and a tenant whose client cannot be built (e.g.
+   *  its certificate fails to load) fails the whole resource with
+   *  [[OsciError.TenantInitFailed]] naming that tenant — there is no
+   *  partial boot.
+   *
+   *  Needs a `LoggerFactory[F]` in scope, like `OsciClient.resource` — a
+   *  failing [[LaufzettelSink]] is logged at warn instead of failing the
+   *  operation.
    */
-  def fromConfigs[F[_]: Async](
+  def fromConfigs[F[_]: Async: LoggerFactory](
       src:    ConfigSource[F],
       dvdvFor: TenantId => DvdvClient[F],
       sink:   LaufzettelSink[F]
@@ -23,7 +34,9 @@ object OsciFacade {
     for {
       cfgs  <- Resource.eval(src.load)
       pairs <- cfgs.toList.traverse { case (id, c) =>
-                 OsciClient.resource[F](c, dvdvFor(id), sink).map(id -> _)
+                 OsciClient.resource[F](c, dvdvFor(id), sink)
+                   .adaptError { case e => OsciError.TenantInitFailed(id, e) }
+                   .map(id -> _)
                }
       registry = TenantRegistry.inMemory[F](pairs.toMap)
     }

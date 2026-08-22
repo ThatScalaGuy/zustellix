@@ -34,15 +34,16 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     def batchVerifyCategory(r: List[Request]) = bump(List.empty[VerificationResult])
   }
 
+  private val fp = Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2")
+
   test("categories is cached: two calls hit the underlying client once") {
     val cfg = CacheConfig(categoriesTtl = 1.hour)
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, cfg)
-      _         <- cached.categories
-      _         <- cached.categories
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, cfg).use { cached =>
+                     cached.categories *> cached.categories *> counter.get
+                   }
     } yield assertEquals(n, 1)
   }
 
@@ -51,10 +52,9 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, cfg)
-      _         <- cached.serviceVersion
-      _         <- cached.serviceVersion
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, cfg).use { cached =>
+                     cached.serviceVersion *> cached.serviceVersion *> counter.get
+                   }
     } yield assertEquals(n, 2)
   }
 
@@ -62,10 +62,9 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, CacheConfig.disabled)
-      _         <- cached.categories
-      _         <- cached.categories
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, CacheConfig.disabled).use { cached =>
+                     cached.categories *> cached.categories *> counter.get
+                   }
     } yield assertEquals(n, 2)
   }
 
@@ -75,12 +74,13 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, CacheConfig())
-      _         <- cached.findAuthorityDescription(a, k1)
-      _         <- cached.findAuthorityDescription(a, k1)
-      _         <- cached.findAuthorityDescription(b, k1)
-      _         <- cached.findAuthorityDescription(a, k2)
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, CacheConfig()).use { cached =>
+                     cached.findAuthorityDescription(a, k1) *>
+                       cached.findAuthorityDescription(a, k1) *>
+                       cached.findAuthorityDescription(b, k1) *>
+                       cached.findAuthorityDescription(a, k2) *>
+                       counter.get
+                   }
     } yield assertEquals(n, 3) // (a,k1) once, (b,k1) once, (a,k2) once
   }
 
@@ -90,10 +90,11 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, CacheConfig())
-      _         <- cached.findCertificateByFingerprint(colon)
-      _         <- cached.findCertificateByFingerprint(plain)
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, CacheConfig()).use { cached =>
+                     cached.findCertificateByFingerprint(colon) *>
+                       cached.findCertificateByFingerprint(plain) *>
+                       counter.get
+                   }
     } yield assertEquals(n, 1) // both spellings normalize to the same key
   }
 
@@ -101,12 +102,59 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
-      cached    <- CachedDvdvClient.make[IO](underlying, CacheConfig())
-      _         <- cached.findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "v")
-      _         <- cached.findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "v")
-      _         <- cached.findOrganizationsByServiceElement("CUSTOM_TYPE", ParameterType.URI, "v")
-      _         <- cached.findOrganizationsByServiceElement("CUSTOM_TYPE", ParameterType.URI, "v")
-      n         <- counter.get
+      n         <- CachedDvdvClient.make[IO](underlying, CacheConfig()).use { cached =>
+                     cached.findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "v") *>
+                       cached.findOrganizationsByServiceElement(ServiceElementType.OSCI_ADDRESSEE, ParameterType.URI, "v") *>
+                       cached.findOrganizationsByServiceElement("CUSTOM_TYPE", ParameterType.URI, "v") *>
+                       cached.findOrganizationsByServiceElement("CUSTOM_TYPE", ParameterType.URI, "v") *>
+                       counter.get
+                   }
     } yield assertEquals(n, 2) // one backend call per overload key
+  }
+
+  test("expired entries are recomputed after their TTL") {
+    val cfg = CacheConfig(findCertificateByFingerprintTtl = 50.millis)
+    for {
+      counter   <- Ref.of[IO, Int](0)
+      underlying = countingClient(counter)
+      n         <- CachedDvdvClient.make[IO](underlying, cfg).use { cached =>
+                     cached.findCertificateByFingerprint(fp) *>
+                       IO.sleep(150.millis) *>
+                       cached.findCertificateByFingerprint(fp) *>
+                       counter.get
+                   }
+    } yield assertEquals(n, 2)
+  }
+
+  test("background fiber purges an expired entry without re-access") {
+    for {
+      counter   <- Ref.of[IO, Int](0)
+      underlying = countingClient(counter)
+      deleted   <- Ref.of[IO, Int](0)
+      caches0   <- CachedDvdvClient.mkCaches[IO](CacheConfig(findCertificateByFingerprintTtl = 50.millis))
+      caches     = caches0.copy(certByFpC = caches0.certByFpC.withOnDelete(_ => deleted.update(_ + 1)))
+      d         <- CachedDvdvClient.fromCaches(underlying, caches, purgeInterval = 20.millis).use { cached =>
+                     cached.findCertificateByFingerprint(fp) *> IO.sleep(300.millis) *> deleted.get
+                   }
+      n         <- counter.get
+    } yield {
+      assert(d >= 1, s"expected the purge fiber to reclaim the expired entry, deleted = $d")
+      assertEquals(n, 1) // reclaimed without a second lookup
+    }
+  }
+
+  test("purge fiber stops when the Resource is released") {
+    for {
+      counter   <- Ref.of[IO, Int](0)
+      underlying = countingClient(counter)
+      deleted   <- Ref.of[IO, Int](0)
+      caches0   <- CachedDvdvClient.mkCaches[IO](CacheConfig(findCertificateByFingerprintTtl = 100.millis))
+      caches     = caches0.copy(certByFpC = caches0.certByFpC.withOnDelete(_ => deleted.update(_ + 1)))
+      _         <- CachedDvdvClient.fromCaches(underlying, caches, purgeInterval = 20.millis).use { cached =>
+                     cached.findCertificateByFingerprint(fp).void
+                   }
+      _         <- IO.sleep(300.millis) // entry expires, but the fiber is gone
+      d         <- deleted.get
+    } yield assertEquals(d, 0)
   }
 }

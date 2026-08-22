@@ -139,6 +139,29 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
 >   kind when no code exists. `status.delivered` replaces "starts with `0`
 >   or `3`" checks, and `status.render` yields the previous plain string for
 >   logs and DB columns.
+> - SOAP faults from the intermediary (osci-bibliothek's
+>   `OSCIErrorException` / `SoapServerException`) now raise
+>   `OsciError.OsciResponse` with the fault's `9xxx` code instead of
+>   `OsciError.OsciTransport` — the same failure is typed identically
+>   whether it arrives as feedback rows or as a SOAP fault, and a failure
+>   `Laufzettel` records `Feedback(code)` instead of
+>   `Failed("OsciTransport")`.
+> - `IllegalArgumentException` / `IllegalStateException` escaping the OSCI
+>   library now surface as `OsciError.Config` instead of `OsciTransport`.
+> - `OsciMailboxConfig` now rejects a non-positive `fetchLimit` with
+>   `OsciError.Config` at construction.
+> - A DVDV service element with a missing or blank `serviceElementUri` now
+>   fails at resolve time with `OsciError.ServiceElementMissing` instead of
+>   surfacing much later as a mislabeled `OsciError.OsciTransport` from
+>   inside the transport. And the intermediary's cipher certificate may now
+>   be supplied by a standalone `CIPHER_CERTIFICATE` element with the same
+>   `serviceElementDescriptionName` — the fallback the addressee already
+>   had; previously that shape raised `RecipientCertMissing`.
+> - `OsciClient.resource` (all overloads) and `OsciFacade.fromConfigs` now
+>   require a `given LoggerFactory[F]` in scope, like the `DvdvClient`
+>   constructors — a failing `LaufzettelSink` is now logged at warn instead
+>   of being silently swallowed. Recording stays best-effort: the operation
+>   still never fails on a sink error.
 
 ---
 
@@ -185,6 +208,11 @@ CertSource.PemBytes(
 SHA-1 fingerprint hex, and the leaf-first certificate chain the source
 provides). The DVDV/OSCI clients call this for you — you rarely touch it
 directly.
+
+A PKCS12 source must contain exactly one private-key entry — with several
+entries loading fails rather than picking one arbitrarily — and the store
+password is also used as the entry password, as produced by
+`openssl pkcs12 -export` and keytool.
 
 `toString` is redacted on every case, so a `CertSource` (or a config holding
 one) can be logged without leaking its password.
@@ -238,14 +266,28 @@ DirectoryCertManager.resource[IO](cfg).use { certs =>
 ```
 
 The first scan completes before the `Resource` is ready (a misconfigured
-directory fails fast). A corrupt `<alias>.p12` is logged and skipped — the
-rest still swap in. The active map always reflects current disk truth, so a
-rotated-away cert is never served stale.
+directory fails fast). A `<alias>.p12` that has never loaded (e.g. corrupt)
+is logged and skipped — the rest still swap in. Once an alias has loaded, a
+transient per-file failure — a keystore read mid-overwrite during rotation,
+or a password entry that has not landed yet — retains the previously loaded
+credential instead of dropping the tenant, with the failure logged each scan
+until the file loads again; an alias is dropped only when its `.p12` file is
+deleted from the directory (observed at the next scan). The `.p12` extension
+is matched case-insensitively, and a bare `.p12` file (empty alias) or a
+directory named like a keystore is ignored. Rotate files
+atomically — write to a temp file in the same directory, then
+`Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE)` — since
+`cp`/`scp`/configmap-style sync is not atomic, and a torn file would
+otherwise be served from the retained previous credential until the write
+completes.
 
-`zustellix-utils` depends only on `log4cats-core`, so to use `Slf4jFactory`
-as shown above, add `org.typelevel::log4cats-slf4j` plus an SLF4J backend
-(e.g. `logback-classic`) to your own build — or provide any other
-`LoggerFactory[F]` implementation.
+`zustellix-utils`, `zustellix-dvdv` and `zustellix-osci` depend only on
+`log4cats-core`, so to use `Slf4jFactory` as shown above, add
+`org.typelevel::log4cats-slf4j` plus an SLF4J backend (e.g.
+`logback-classic`) to your own build — or provide any other
+`LoggerFactory[F]` implementation. The `DvdvClient` and `OsciClient`
+constructors and `OsciFacade.fromConfigs` need the same `LoggerFactory[F]`
+in scope.
 
 ---
 
@@ -259,10 +301,14 @@ import de.thatscalaguy.zustellix.dvdv.*
 import de.thatscalaguy.zustellix.dvdv.model.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.slf4j.Slf4jFactory
 
 import java.nio.file.Paths
 
 object Demo extends IOApp.Simple:
+
+  given LoggerFactory[IO] = Slf4jFactory.create[IO]
 
   val config = DvdvConfig(
     baseUri    = uri"https://your-dvdv-betreiber.example",
@@ -298,10 +344,16 @@ DvdvClient.resource[IO](config)
 // Ember-backed, signing cert resolved from a shared CertManager by alias:
 DvdvClient.resource[IO](config, certManager, CertAlias("flensburg"))
 
-// Bring your own http4s Client (tests, non-Ember backends; needs Async):
+// Bring your own http4s Client (tests, non-Ember backends; needs Async).
+// config.requestTimeout is applied around the provided client:
 DvdvClient.fromClient[IO](config, myClient)
 DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
+
+All constructors require a `given LoggerFactory[F]` in scope (the auth layer
+warns on degenerate token TTL/skew combinations) — see the
+[log4cats note](#many-certificates-by-alias-certmanager) at the end of the
+`utils` section for how to supply one.
 
 On the `CertManager` overloads the alias is resolved once at build time (so an
 unknown alias fails fast) and then again on every token refresh — a cert
@@ -327,13 +379,15 @@ val config = DvdvConfig(
   tokenEndpoint    = None,            // explicit token POST target; defaults to <active server>/extern/standaloneauth/token
   jwtAudience      = None,            // JWT aud claim; defaults to the token endpoint actually contacted (follows failover)
   jwtLifetime      = 60.seconds,      // client_assertion lifetime
-  tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry
-  requestTimeout   = 30.seconds,
+  tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry (clamped to at most half the token TTL)
+  defaultTokenTtl  = 5.minutes,       // token lifetime assumed when the token response has no expires_in
+  requestTimeout   = 30.seconds,      // per request attempt; applied by every constructor, incl. fromClient
 
   cacheConfig = CacheConfig(
     categoriesTtl               = 2.hours,     // override any subset
     findAuthorityDescriptionTtl = 15.minutes,
-    verifyCategoryTtl           = 1.minute
+    verifyCategoryTtl           = 1.minute,
+    purgeInterval               = 1.minute     // background purge cadence for expired entries
   )
 )
 
@@ -352,6 +406,8 @@ Default TTLs:
 | `findServiceDescription`, `findOrganizationsByServiceElement`       | 10 minutes  |
 | `verifyCategory`                                                    | 5 minutes   |
 | `serviceVersion`, all `batch*` POSTs                                | not cached  |
+
+Expired entries are also purged by a background fiber every `purgeInterval` (default: 1 minute), scoped to the client `Resource`, so the caches do not grow unboundedly between accesses.
 
 ### API examples
 
@@ -493,11 +549,12 @@ Every outbound operation:
    addressee (the intermediary stays blind to personal data), and transmits it
    via osci-bibliothek;
 4. records a `Laufzettel` to the configured sink — on failure too, so the
-   audit trail is not success-only (best-effort — a sink failure never fails
-   the operation).
+   audit trail is not success-only (best-effort — a sink failure is logged
+   at warn and never fails the operation).
 
-> The OSCI bridge requires a PKCS12 `CertSource` (`Pkcs12` or `Pkcs12Bytes`) —
-> neither PEM variant is supported here.
+> osci-bibliothek itself consumes PKCS12 only, but the PEM `CertSource`
+> variants (`Pem` / `PemBytes`) are converted to an in-memory PKCS12
+> automatically — all four variants work here.
 
 ### Single tenant (sync XMeld)
 
@@ -507,9 +564,13 @@ import de.thatscalaguy.zustellix.dvdv.*
 import de.thatscalaguy.zustellix.osci.*
 import de.thatscalaguy.zustellix.utils.cert.CertSource
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.slf4j.Slf4jFactory
 import java.nio.file.Paths
 
 object SendDemo extends IOApp.Simple:
+
+  given LoggerFactory[IO] = Slf4jFactory.create[IO]
 
   val cert = CertSource.Pkcs12(Paths.get("/secrets/flensburg.p12"), sys.env("P12_PW"))
 
@@ -720,6 +781,8 @@ OsciMailbox.resource[IO](mailboxConfig, cert, myTransport)
 ```scala
 import de.thatscalaguy.zustellix.osci.*
 
+// given LoggerFactory[IO] in scope, as in the single-tenant example
+
 val configs = Map(
   TenantId("flensburg") -> OsciConfig(TenantId("flensburg"), flensburgCert),
   TenantId("kiel")      -> OsciConfig(TenantId("kiel"),      kielCert)
@@ -762,6 +825,11 @@ optional and default to 10 s / 120 s; `contentSignatures` is optional —
 `true` stores the decrypted response XML on `Laufzettel.rawXml`, default
 `false`, see [Laufzettel](#laufzettel).)
 
+`fromConfigs` is all-or-nothing: every tenant client is built eagerly when
+the resource is acquired, and a tenant whose cert fails to load fails the
+whole facade with an `OsciError.TenantInitFailed` naming that tenant — there
+is no partial boot.
+
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
 per tenant cert/intermediary.
 
@@ -774,6 +842,8 @@ alias as the tenant id:
 ```scala
 val alias = CertAlias("flensburg")
 
+// given LoggerFactory[IO] in scope, as in the single-tenant example
+
 (for
   dvdv <- DvdvClient.resource[IO](dvdvConfig, certManager, alias)
   osci <- OsciClient.resource[IO](osciConfig, certManager, alias, dvdv, LaufzettelSink.console[IO])
@@ -782,6 +852,16 @@ yield osci).use(_.request(Ags.unsafe("01001000"), "<xmeld>...</xmeld>"))
 // the mailbox takes the same alias:
 OsciMailbox.resource[IO](mailboxConfig, certManager, alias)
 ```
+
+On the `CertManager` overloads (`OsciClient.resource(..., certManager, alias,
+...)` and `OsciMailbox.resource(config, certManager, alias)`) the alias is
+resolved once at build time (so an unknown alias fails fast) and then again on
+every operation — a cert rotated in the manager (e.g. by
+`DirectoryCertManager`) signs and decrypts the next `request` / `send` /
+`pending` / `fetch` without a rebuild; the built OSCI Originator is cached and
+only rebuilt when the credential actually changes. The `certSource`-based
+constructors load the cert once and keep it for the lifetime of the
+client/mailbox.
 
 ### Laufzettel
 
@@ -829,8 +909,9 @@ trail, not just successes. For a failure Laufzettel:
 - `rawXml` is `None`, `warnings` is `Nil`;
 - `recipientUri` is empty when the resolver itself failed (no route exists).
 
-Recording stays best-effort in both directions: a sink failure never fails
-the operation, and a failure record never replaces or swallows the raised
+Recording stays best-effort in both directions: a sink failure is logged at
+warn via the required `LoggerFactory` and then discarded — it never fails
+the operation — and a failure record never replaces or swallows the raised
 `OsciError`.
 
 ### Error model
@@ -843,14 +924,15 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `InvalidAgs`           | the given string is not a well-formed 8-digit AGS (raised by the `Ags` smart constructors) |
 | `AgsNotInDvdv`         | DVDV has no service registered for the AGS + service URI |
 | `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
-| `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent |
+| `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent or carries no `serviceElementUri` |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
-| `OsciResponse`         | OSCI returned an error (`9xxx`) feedback code; carries the `messageId` when one was already issued |
+| `OsciResponse`         | OSCI returned an error (`9xxx`) code — as feedback rows or as a SOAP fault; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
+| `MessageIdMismatch`    | `fetch(messageId)` got a response whose message id names a different delivery |
 | `UnsignedContent`      | received content carries no content signature and `contentSignatures = Require` |
 | `InvalidContentSignature` | the content signature on received content failed verification (raised regardless of policy) |
 | `Certificate`          | cert / key decoding failure |
-| `Config`               | bad configuration (invalid URI, unknown cert type, …) |
+| `Config`               | bad configuration (invalid URI, unknown cert type, non-positive `fetchLimit`, illegal argument/state raised by the OSCI library, …) |
 
 #### OSCI feedback codes
 
@@ -861,7 +943,7 @@ the four-digit code:
 |--------|---------|----------|
 | `0xxx` | success | normal result |
 | `3xxx` | warning — the request **was** executed | tolerated; surfaced as `OsciFeedback(code, text)` in `OsciResponse.warnings`, `OsciReceipt.warnings`, `Laufzettel.warnings`, `PendingPage.warnings` and `OsciMessage.warnings` |
-| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued) |
+| `9xxx` | error — the request was not executed | raised as `OsciError.OsciResponse` (with the intermediary's `messageId` when one was already issued); the code is also extracted when the intermediary reports it as a SOAP fault |
 
 All feedback rows are inspected, so an error behind a per-language duplicate
 row fails too. A common warning is `3802` ("Signatur des Empfängers über die

@@ -28,9 +28,13 @@ object OsciError {
         s"DVDV service description for AGS '${ags.value}' has no cipher certificate for '$kind'"
       )
 
+  /** The service description resolved for `ags` has no usable service
+   *  element of type `kind` (`OSCI_ADDRESSEE` or `OSCI_INTERMEDIARY`): the
+   *  element is absent, or present without a non-blank `serviceElementUri`.
+   */
   final case class ServiceElementMissing(ags: Ags, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '${ags.value}' is missing service element of type '$kind'"
+        s"DVDV service description for AGS '${ags.value}' has no usable service element of type '$kind'"
       )
 
   final case class OsciTransport(cause: Throwable)
@@ -50,6 +54,17 @@ object OsciError {
   final case class NoSuchMessage(messageId: String)
       extends OsciError(s"No delivery found for messageId '$messageId'")
 
+  /** `fetch(messageId)` got a response whose message id names a different
+   *  delivery — the intermediary answered for the wrong message. Raised
+   *  before the response content is decrypted or verified: the fetch is the
+   *  acknowledgement (see [[OsciMailbox]]), so proceeding under the requested
+   *  id would acknowledge/process the wrong delivery.
+   */
+  final case class MessageIdMismatch(requested: String, returned: String)
+      extends OsciError(
+        s"FetchDelivery for messageId '$requested' returned a delivery with messageId '$returned'"
+      )
+
   /** Received content carries no author signature and the policy is
    *  [[ContentSignaturePolicy.Require]]. `messageId` identifies the affected
    *  message when one is known at that point.
@@ -68,6 +83,13 @@ object OsciError {
 
   final case class Certificate(cause: Throwable)
       extends OsciError("Certificate / key error", cause)
+
+  /** Raised by [[OsciFacade.fromConfigs]] when building one tenant's client
+   *  fails during resource acquisition. The facade is all-or-nothing, so this
+   *  fails the whole resource, but it names the offending tenant.
+   */
+  final case class TenantInitFailed(id: TenantId, cause: Throwable)
+      extends OsciError(s"Tenant '${id.value}' failed to initialise: ${cause.getMessage}", cause)
 
   final case class Config(reason: String)
       extends OsciError(s"Configuration error: $reason")

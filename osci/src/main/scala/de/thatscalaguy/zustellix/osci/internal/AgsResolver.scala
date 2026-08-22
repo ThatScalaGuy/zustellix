@@ -37,16 +37,17 @@ object AgsResolver {
             case None    => Sync[F].raiseError(OsciError.ServiceElementMissing(ags, t.toString))
           }
 
-        // The addressee's content-encryption cert is the inline cipher cert on
-        // the OSCI_ADDRESSEE element; if absent, a standalone CIPHER_CERTIFICATE
-        // element carrying the *same* serviceElementDescriptionName is the
-        // fallback (matched by name+type, never "first of type").
-        def addresseeCipherCert(addr: ServiceElementInfo): Option[DvdvCert] =
-          addr.cipherCertificate.orElse(
+        // An element's content-encryption cert is its inline cipher cert; if
+        // absent, a standalone CIPHER_CERTIFICATE element carrying the *same*
+        // serviceElementDescriptionName is the fallback (matched by name+type,
+        // never "first of type"). Applies to OSCI_ADDRESSEE and
+        // OSCI_INTERMEDIARY alike.
+        def cipherCertFor(e: ServiceElementInfo): Option[DvdvCert] =
+          e.cipherCertificate.orElse(
             elems
-              .find(e =>
-                e.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE) &&
-                  e.serviceElementDescriptionName == addr.serviceElementDescriptionName
+              .find(c =>
+                c.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE) &&
+                  c.serviceElementDescriptionName == e.serviceElementDescriptionName
               )
               .flatMap(_.cipherCertificate)
           )
@@ -54,10 +55,10 @@ object AgsResolver {
         for {
           addr       <- find(ServiceElementType.OSCI_ADDRESSEE)
           intm       <- find(ServiceElementType.OSCI_INTERMEDIARY)
-          addrUri    <- parseUri(addr.serviceElementUri.getOrElse(""))
-          intUri     <- parseUri(intm.serviceElementUri.getOrElse(""))
-          addrCipher <- requireCipherCert(ags, "OSCI_ADDRESSEE", addresseeCipherCert(addr))
-          intCipher  <- requireCipher(ags, "OSCI_INTERMEDIARY", intm)
+          addrUri    <- requireUri(ags, "OSCI_ADDRESSEE", addr)
+          intUri     <- requireUri(ags, "OSCI_INTERMEDIARY", intm)
+          addrCipher <- requireCipherCert(ags, "OSCI_ADDRESSEE", cipherCertFor(addr))
+          intCipher  <- requireCipherCert(ags, "OSCI_INTERMEDIARY", cipherCertFor(intm))
           addrSig    <- addr.signatureCertificate.traverse(c =>
                           decodeCert(c).adaptError(t => OsciError.Certificate(t))
                         )
@@ -65,8 +66,11 @@ object AgsResolver {
         yield OsciRoute(addrUri, addrCipher, addrSig, intUri, intCipher)
       }
 
-      private def requireCipher(ags: Ags, kind: String, e: ServiceElementInfo): F[X509Certificate] =
-        requireCipherCert(ags, kind, e.cipherCertificate)
+      private def requireUri(ags: Ags, kind: String, e: ServiceElementInfo): F[URI] =
+        e.serviceElementUri.map(_.trim).filter(_.nonEmpty) match {
+          case Some(s) => parseUri(s)
+          case None    => Sync[F].raiseError[URI](OsciError.ServiceElementMissing(ags, kind))
+        }
 
       private def requireCipherCert(ags: Ags, kind: String, c: Option[DvdvCert]): F[X509Certificate] =
         c match {

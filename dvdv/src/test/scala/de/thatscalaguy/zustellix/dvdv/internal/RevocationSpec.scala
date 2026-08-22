@@ -30,10 +30,21 @@ class RevocationSpec extends CatsEffectSuite {
     HttpDvdvClient[IO](Client.fromHttpApp(routes.orNotFound), cfg)
 
   private def routesReturning(cert: Certificate): HttpRoutes[IO] =
+    routesReturningJson(cert.asJson)
+
+  private def routesReturningJson(body: io.circe.Json): HttpRoutes[IO] =
     HttpRoutes.of[IO] {
       case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findCertificateByFingerprint" :? _ =>
-        Ok(cert.asJson)
+        Ok(body)
     }
+
+  // Raw JSON so the wire genuinely carries a constant this client's enum
+  // does not know.
+  private val unknownReasonBody = io.circe.Json.obj(
+    "fingerprint"      -> io.circe.Json.fromString("deadbeef"),
+    "revocationDate"   -> io.circe.Json.fromString("2026-01-01T00:00:00Z"),
+    "revocationReason" -> io.circe.Json.fromString("SOME_FUTURE_REASON")
+  )
 
   private val TestFp = Fingerprint.unsafe("0272c56c9742a62501329a3aa78974f1605c92a2")
 
@@ -69,6 +80,41 @@ class RevocationSpec extends CatsEffectSuite {
         assertEquals(reason, Some(RevocationReason.UNSPECIFIED))
       case other =>
         fail(s"expected CertificateRevoked, got $other")
+    }
+  }
+
+  test("raises CertificateRevoked for a cert revoked with an unknown reason") {
+    val c = client(routesReturningJson(unknownReasonBody), config())
+    c.findCertificateByFingerprint(TestFp).attempt.map {
+      case Left(DvdvError.CertificateRevoked(date, rawDate, reason)) =>
+        assertEquals(date, Some(Instant.parse("2026-01-01T00:00:00Z")))
+        assertEquals(rawDate, Some("2026-01-01T00:00:00Z"))
+        assertEquals(reason, Some(RevocationReason.Other("SOME_FUTURE_REASON")))
+      case other =>
+        fail(s"expected CertificateRevoked, got $other")
+    }
+  }
+
+  test("raises CertificateRevoked when only revocationReason is set") {
+    val cert = Certificate(
+      fingerprint      = Some("deadbeef"),
+      revocationReason = Some(RevocationReason.CERTIFICATE_HOLD)
+    )
+    val c = client(routesReturning(cert), config())
+    c.findCertificateByFingerprint(TestFp).attempt.map {
+      case Left(DvdvError.CertificateRevoked(date, rawDate, reason)) =>
+        assertEquals(date, None)
+        assertEquals(rawDate, None)
+        assertEquals(reason, Some(RevocationReason.CERTIFICATE_HOLD))
+      case other =>
+        fail(s"expected CertificateRevoked, got $other")
+    }
+  }
+
+  test("returns the cert when ignoreRevocation = true even with an unknown reason") {
+    val c = client(routesReturningJson(unknownReasonBody), config(ignoreRevocation = true))
+    c.findCertificateByFingerprint(TestFp).map { r =>
+      assertEquals(r.flatMap(_.revocationReason), Some(RevocationReason.Other("SOME_FUTURE_REASON")))
     }
   }
 
