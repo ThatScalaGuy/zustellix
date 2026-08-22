@@ -536,6 +536,24 @@ trait DvdvClient[F[_]]:
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 ```
 
+#### Deviations from the published OpenAPI schema
+
+Six operations deviate from the response types `dvdv-api.yaml` declares — the
+schema is wrong there; the client decodes what real servers actually send:
+
+| Operation | Schema declares | Client decodes |
+|-----------|-----------------|----------------|
+| `findOrganizationsByServiceElement` | single `OrganizationDescription` | `List[LightweightOrganization]` |
+| `findServiceSpecificationUrisByCategory` | array of `ServiceBase` objects | `List[String]` (the URIs) |
+| `batchFindAuthorityDescription` | single `OrganizationDescription` | `List[Option[OrganizationDescription]]`, positionally aligned |
+| `batchFindOrganizationsByServiceElement` | single `OrganizationDescription` | `List[List[LightweightOrganization]]` |
+| `batchFindServiceDescription` | single `Service` | `List[Option[Service]]`, positionally aligned |
+| `batchFindServiceSpecificationUrisByCategory` | single `Request` | `List[List[String]]` |
+
+These wire shapes are pinned by fixtures under `dvdv/src/test/resources`. The
+batch positional-null miss encoding mirrors the single-call 204/404 miss
+semantics, since the spec does not specify a batch miss encoding.
+
 ---
 
 ## `osci` — OSCI messaging (sync + async)

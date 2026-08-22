@@ -160,4 +160,70 @@ class CodecsSpec extends FunSuite {
     assertEquals(od.organization.flatMap(_.id), None)
     assertEquals(od.organization.flatMap(_.category), None)
   }
+
+  // The batch fixtures pin the client's deviations from the published OpenAPI
+  // schema (issue #25): dvdv-api.yaml declares a single object as the 200
+  // response of four of the six batch endpoints, while the client decodes a
+  // positionally aligned JSON array — with a null per miss, mirroring the
+  // single-call 204/404 miss semantics (the spec does not specify a batch miss
+  // encoding). A client regenerated against the schema's declared types fails
+  // these tests loudly. batchFindCategories and batchVerifyCategory match the
+  // schema and are pinned for completeness.
+  test("batchFindAuthorityDescription response decodes as a positional array of nullable OrganizationDescription") {
+    val parsed = decode[List[Option[OrganizationDescription]]](fixture("batchFindAuthorityDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.flatMap(_.organization).map(_.nameDe), Some("der-orga-name"))
+    assertEquals(results(1), None)
+  }
+
+  test("batchFindCategories response decodes as an array of category-name arrays") {
+    assertEquals(
+      decode[List[List[String]]](fixture("batchFindCategories.json")),
+      Right(List(List("Aufnahmeeinrichtung", "Meldebehörde"), Nil))
+    )
+  }
+
+  test("batchFindOrganizationsByServiceElement response decodes as an array of LightweightOrganization arrays") {
+    val parsed = decode[List[List[LightweightOrganization]]](fixture("batchFindOrganizationsByServiceElement.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.head.id, Some(4711L))
+    assertEquals(results.head.head.organizationKeys, List("foo:1234", "bar:4321"))
+    assertEquals(results(1), Nil)
+  }
+
+  test("batchFindServiceDescription response decodes as a positional array of nullable Service") {
+    val parsed = decode[List[Option[Service]]](fixture("batchFindServiceDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.flatMap(_.nameDe), Some("test-servicename"))
+    assertEquals(results(1), None)
+  }
+
+  test("batchFindServiceSpecificationUrisByCategory response decodes as an array of URI-string arrays") {
+    val parsed = decode[List[List[String]]](fixture("batchFindServiceSpecificationUrisByCategory.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(
+      results.head,
+      List(
+        "http://www.osci.de/xauslaender1170/xauslaender1170ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xauslaender1180/xauslaender1180ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xinneres/quittung/2/xinneresquittungv2.wsdl",
+        "http://www.osci.de/xinneres/quittung/3/xinneresquittungv3.wsdl"
+      )
+    )
+    assertEquals(results(1), Nil)
+  }
+
+  test("batchVerifyCategory response decodes as an array of VerificationResult") {
+    assertEquals(
+      decode[List[VerificationResult]](fixture("batchVerifyCategory.json")),
+      Right(List(VerificationResult(true), VerificationResult(false)))
+    )
+  }
 }
