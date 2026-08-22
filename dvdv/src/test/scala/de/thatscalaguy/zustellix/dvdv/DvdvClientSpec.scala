@@ -12,6 +12,7 @@ import de.thatscalaguy.zustellix.utils.cert.{
   InMemoryCertManager
 }
 import io.circe.Json
+import io.circe.parser.parse
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
@@ -138,6 +139,80 @@ class DvdvClientSpec extends CatsEffectSuite {
           "backup"  -> "/dvdv2-backend/extern/standaloneauth/directory/v2/version"
         )
       )
+    }
+  }
+
+  test("assembled stack: 401 refresh, failover stickiness and the cache cooperate on one call path") {
+    val tokenPath = "/extern/standaloneauth/token"
+    val dirPath   = "/extern/standaloneauth/directory/v2/findServiceSpecificationUrisByCategory"
+    for {
+      bytes      <- IO.blocking(java.nio.file.Files.readAllBytes(resourcePath("test-cert.p12")))
+      fixture    <- IO.blocking(java.nio.file.Files.readString(resourcePath("findUrisByCategory_Aufnahmeeinrichtung.json")))
+      uris       <- IO.fromEither(parse(fixture))
+      hits       <- Ref.of[IO, List[(String, String)]](Nil)
+      tokenPosts <- Ref.of[IO, Int](0)
+      backend = HttpApp[IO] { req =>
+                  val host = req.uri.authority.map(_.host.value).getOrElse("?")
+                  val path = req.uri.path.renderString
+                  hits.update(_ :+ (host -> path)) *> {
+                    (req.method, path) match {
+                      case (Method.POST, `tokenPath`) =>
+                        tokenPosts.updateAndGet(_ + 1).flatMap { n =>
+                          Ok(Json.obj(
+                            "access_token" -> Json.fromString(s"tok-$n"),
+                            "expires_in"   -> Json.fromLong(300L),
+                            "token_type"   -> Json.fromString("Bearer")
+                          ))
+                        }
+                      case (Method.GET, `dirPath`) if host == "primary" =>
+                        IO(Response[IO](Status.ServiceUnavailable))
+                      case (Method.GET, `dirPath`) =>
+                        val auth = req.headers.get(CIString("Authorization")).map(_.head.value)
+                        if (auth.forall(_ == "EmbeddedBearer tok-1")) IO(Response[IO](Status.Unauthorized))
+                        else Ok(uris)
+                      case _ => NotFound()
+                    }
+                  }
+                }
+      cfg = DvdvConfig(
+              baseUri         = uri"http://primary",
+              certSource      = Some(CertSource.Pkcs12Bytes(bytes, "test")),
+              failoverServers = List(uri"http://backup")
+            )
+      r <- DvdvClient.fromClient[IO](cfg, Client.fromHttpApp(backend)).use { dvdv =>
+             for {
+               first  <- dvdv.findServiceSpecificationUrisByCategory(model.Category.unsafe("Aufnahmeeinrichtung"))
+               h1     <- hits.get
+               second <- dvdv.findServiceSpecificationUrisByCategory(model.Category.unsafe("Aufnahmeeinrichtung"))
+               h2     <- hits.get
+             } yield (first, h1, second, h2)
+           }
+      posts <- tokenPosts.get
+    } yield {
+      val (first, h1, second, h2) = r
+      val expected = List(
+        "http://www.osci.de/xauslaender1170/xauslaender1170ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xauslaender1180/xauslaender1180ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xinneres/quittung/2/xinneresquittungv2.wsdl",
+        "http://www.osci.de/xinneres/quittung/3/xinneresquittungv3.wsdl"
+      )
+      assertEquals(first, expected)
+      assertEquals(second, expected)
+      assertEquals(posts, 2) // one initial mint, exactly one 401-driven refresh
+      assertEquals(
+        h1,
+        List(
+          // token POST rides the failover middleware at the then-active primary
+          "primary" -> tokenPath,
+          // directory GET fails over primary -> backup; the backup rejects tok-1
+          "primary" -> dirPath,
+          "backup"  -> dirPath,
+          // the 401 retry mints its token at, and stays sticky on, the backup
+          "backup"  -> tokenPath,
+          "backup"  -> dirPath
+        )
+      )
+      assertEquals(h2, h1) // second call served from the cache: no backend traffic
     }
   }
 

@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.{IO, Ref}
+import cats.effect.testkit.TestControl
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.{DvdvConfig, DvdvError, TestCerts}
 import de.thatscalaguy.zustellix.dvdv.internal.FailoverClient
@@ -177,6 +178,29 @@ class TokenManagerSpec extends CatsEffectSuite {
     }
   }
 
+  test("the token is refreshed once its refresh point passes") {
+    TestControl.executeEmbed {
+      for {
+        rec <- recorder
+        // ttl 60s with the default 30s skew: refresh point max(60-30, 60/2) = 30s
+        tm  <- mkManager(tokenClient(rec)(n => Ok(accessTokenJson(s"tok-$n", 60))))
+        t1 <- tm.bearer
+        _  <- IO.sleep(29.seconds)
+        t2 <- tm.bearer // still inside the window
+        n1 <- rec.count.get
+        _  <- IO.sleep(2.seconds) // past the refresh point
+        t3 <- tm.bearer
+        n2 <- rec.count.get
+      } yield {
+        assertEquals(t1, "tok-1")
+        assertEquals(t2, "tok-1")
+        assertEquals(n1, 1)
+        assertEquals(t3, "tok-2")
+        assertEquals(n2, 2)
+      }
+    }
+  }
+
   test("expires_in = 0 still refreshes on every call") {
     for {
       rec <- recorder
@@ -281,6 +305,31 @@ class TokenManagerSpec extends CatsEffectSuite {
     } yield {
       assertEquals(old, "tok-1")
       assertEquals(toks.toSet, Set("tok-2"))
+      assertEquals(n, 2)
+    }
+  }
+
+  test("invalidate landing while a refresh is in flight neither deadlocks nor drops the fresh token") {
+    for {
+      rec     <- recorder
+      entered <- IO.deferred[Unit]
+      gate    <- IO.deferred[Unit]
+      tm <- mkManager(tokenClient(rec) { n =>
+              if (n == 2) entered.complete(()) *> gate.get *> Ok(accessTokenJson("tok-2", 3600))
+              else Ok(accessTokenJson(s"tok-$n", 3600))
+            })
+      old   <- tm.bearer // tok-1, POST 1
+      fib   <- (tm.invalidate(old) *> tm.bearer).start
+      _     <- entered.get        // POST 2 is now in flight under the refresh mutex
+      _     <- tm.invalidate(old) // a second 401 carrying the OLD token lands mid-refresh
+      _     <- gate.complete(())
+      fresh <- fib.joinWithNever
+      again <- tm.bearer
+      n     <- rec.count.get
+    } yield {
+      assertEquals(old, "tok-1")
+      assertEquals(fresh, "tok-2")
+      assertEquals(again, "tok-2") // the stale mid-flight invalidate did not drop the fresh token
       assertEquals(n, 2)
     }
   }

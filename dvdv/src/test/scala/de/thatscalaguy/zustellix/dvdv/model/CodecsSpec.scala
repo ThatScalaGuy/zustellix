@@ -111,6 +111,22 @@ class CodecsSpec extends FunSuite {
     assertEquals(r.toOption.get.expires_in, Some(86400L))
   }
 
+  // dvdv-api.yaml's AccessToken schema is snake_case (access_token/expires_in/
+  // token_type) while the spec's response example shows camelCase (accessToken/
+  // expiresIn/tokenType); the codec deliberately follows the schema — the OIDC
+  // wire format real servers emit.
+  test("AccessTokenResponse decodes the real token fixture with the schema's snake_case fields") {
+    val parsed = decode[AccessTokenResponse](fixture("AccessToken.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val tok = parsed.toOption.get
+    assert(tok.access_token.startsWith("eyJ"), tok.access_token)
+    assertEquals(tok.expires_in, Some(86400L))
+    assertEquals(tok.refresh_expires_in, Some(0L))
+    assertEquals(tok.token_type, Some("Bearer"))
+    assertEquals(tok.`not-before-policy`, Some(0))
+    assertEquals(tok.scope, Some("email profile dvdv2-kernsystem-application-client-scope"))
+  }
+
   test("LightweightOrganization decodes the real fixture (category null)") {
     val parsed = decode[LightweightOrganization](fixture("OrganizationLightweight.json"))
     assert(parsed.isRight, s"failed: $parsed")

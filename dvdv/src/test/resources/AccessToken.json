@@ -1,0 +1,9 @@
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmcDowZDVkNSIsImV4cCI6MTcwMDA4NjQwMH0.fC7CGKIZA",
+  "expires_in": 86400,
+  "refresh_expires_in": 0,
+  "token_type": "Bearer",
+  "not-before-policy": 0,
+  "session_state": "5f1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+  "scope": "email profile dvdv2-kernsystem-application-client-scope"
+}

@@ -187,6 +187,75 @@ class FailoverClientSpec extends CatsEffectSuite {
     }
   }
 
+  test("after full exhaustion the last server stays sticky until the recover window elapses") {
+    val hits    = Ref.unsafe[IO, List[String]](Nil)
+    val allDown = Ref.unsafe[IO, Boolean](true)
+    val backend = routed(hits) { _ =>
+      allDown.get.map(d => Response[IO](if (d) Status.InternalServerError else Status.Ok))
+    }
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)), recoverAfter = 200.millis)(backend)
+      st1 <- c.status(req)        // exhausts both servers
+      h1  <- hits.get
+      _   <- allDown.set(false)   // everything healthy again
+      _   <- hits.set(Nil)
+      st2 <- c.status(req)        // inside the recover window
+      h2  <- hits.get
+      _   <- IO.sleep(250.millis) // recover window elapses
+      _   <- hits.set(Nil)
+      st3 <- c.status(req)
+      h3  <- hits.get
+    } yield {
+      assertEquals(st1, Status.InternalServerError)
+      assertEquals(h1, List("primary", "secondary"))
+      assertEquals(st2, Status.Ok)
+      assertEquals(h2, List("secondary")) // sticky on the last server tried, primary not probed
+      assertEquals(st3, Status.Ok)
+      assertEquals(h3, List("primary"))   // recovery restarts from the primary
+    }
+  }
+
+  test("concurrent requests during failover all succeed and settle on one active server") {
+    val hits = Ref.unsafe[IO, List[String]](Nil)
+    val backend = routed(hits) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)))(backend)
+      sts <- c.status(req).parReplicateA(16)
+      _   <- hits.set(Nil)
+      st  <- c.status(req)
+      hs  <- hits.get
+    } yield {
+      assertEquals(sts, List.fill(16)(Status.Ok))
+      assertEquals(st, Status.Ok)
+      assertEquals(hs, List("secondary")) // the burst left the state settled on the secondary
+    }
+  }
+
+  test("an elapsed recover window is probed by exactly one concurrent request") {
+    val hits = Ref.unsafe[IO, List[String]](Nil)
+    val backend = routed(hits) {
+      case "primary" => IO(Response[IO](Status.InternalServerError))
+      case _         => IO(Response[IO](Status.Ok))
+    }
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)), recoverAfter = 500.millis)(backend)
+      _   <- c.status(req)        // fail over to secondary
+      _   <- IO.sleep(700.millis) // recover window elapses
+      _   <- hits.set(Nil)
+      sts <- c.status(req).parReplicateA(16)
+      hs  <- hits.get
+    } yield {
+      assertEquals(sts, List.fill(16)(Status.Ok))
+      // state.modify advances the recover deadline atomically, so exactly one
+      // request probes the still-down primary; the rest go straight to the secondary
+      assertEquals(hs.count(_ == "primary"), 1)
+      assertEquals(hs.count(_ == "secondary"), 16) // 15 direct + the probe's fallback
+    }
+  }
+
   test("failover to a server with a path prefix prepends the prefix") {
     val hits = Ref.unsafe[IO, List[(String, String)]](Nil)
     val backend = routedUris(hits) {

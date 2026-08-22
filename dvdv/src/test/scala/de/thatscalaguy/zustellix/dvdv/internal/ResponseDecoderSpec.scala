@@ -149,6 +149,37 @@ class ResponseDecoderSpec extends CatsEffectSuite {
     }
   }
 
+  test("400 with a problem+json body maps to ValidationError") {
+    val problem = Problem(
+      `type` = Some("problems/type/VALIDATION"),
+      title  = Some("invalid"),
+      status = Some(400),
+      detail = Some("bad request_json")
+    )
+    val resp = Response[IO](Status.BadRequest).withEntity(problem.asJson)
+    ResponseDecoder.required[IO, List[String]]("findcategories", resp).attempt.map {
+      case Left(DvdvError.ValidationError(p)) =>
+        assertEquals(p.title, Some("invalid"))
+        assertEquals(p.detail, Some("bad request_json"))
+      case other => fail(s"expected ValidationError, got $other")
+    }
+  }
+
+  test("required: 404 with a problem+json body maps to NotFound") {
+    val problem = Problem(
+      `type`   = Some("problems/type/ENTITY_NOT_FOUND"),
+      title    = Some("Entität nicht gefunden"),
+      status   = Some(404),
+      detail   = Some("nope"),
+      instance = Some("problems/instance/DirectoryEntityNotFound")
+    )
+    val resp = Response[IO](Status.NotFound).withEntity(problem.asJson)
+    ResponseDecoder.required[IO, List[String]]("findcategories", resp).attempt.map {
+      case Left(DvdvError.NotFound(p)) => assertEquals(p, problem)
+      case other                       => fail(s"expected NotFound, got $other")
+    }
+  }
+
   test("5xx with a Problem body carries Some(problem) and the raw body") {
     val problem = Problem(title = Some("down"), status = Some(503))
     val raw     = problem.asJson.noSpaces
