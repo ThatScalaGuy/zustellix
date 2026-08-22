@@ -9,13 +9,15 @@ import io.circe.syntax.*
 import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.{Method, Request as HttpRequest}
 import org.http4s.client.Client
+import org.typelevel.log4cats.LoggerFactory
 
-final class HttpDvdvClient[F[_]: Concurrent](
+final class HttpDvdvClient[F[_]: Concurrent: LoggerFactory](
     http: Client[F],
     config: DvdvConfig
 ) extends DvdvClient[F] {
 
   private val base = config.directoryBase
+  private val log  = LoggerFactory[F].getLogger
   import UriBuilder.{endpoint, withRequestJson, jsonObject}
 
   // --- 3 plain GETs ---
@@ -36,7 +38,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
     val uri = withRequestJson(base, "findauthoritydescription",
       jsonObject("category" -> category.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, OrganizationDescription]("findauthoritydescription", _))
+      .use(ResponseDecoder.optional[F, OrganizationDescription]("findauthoritydescription", _, log))
   }
 
   def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]] = {
@@ -57,7 +59,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
     val uri = withRequestJson(base, "findCertificateByFingerprint",
       jsonObject("fingerPrint" -> fingerPrint.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Certificate]("findCertificateByFingerprint", _))
+      .use(ResponseDecoder.optional[F, Certificate]("findCertificateByFingerprint", _, log))
       .flatTap(_.traverse_(Revocation.check[F](_, config.ignoreRevocation)))
   }
 
@@ -98,7 +100,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "serviceSpecificationUri" -> serviceSpecificationUri
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Service]("findservicedescription", _))
+      .use(ResponseDecoder.optional[F, Service]("findservicedescription", _, log))
   }
 
   def findServiceSpecificationUrisByCategory(category: Category): F[List[String]] = {
@@ -154,6 +156,6 @@ object HttpDvdvClient {
    */
   private val MaxBatchItems = 200
 
-  def apply[F[_]: Concurrent](http: Client[F], config: DvdvConfig): HttpDvdvClient[F] =
+  def apply[F[_]: Concurrent: LoggerFactory](http: Client[F], config: DvdvConfig): HttpDvdvClient[F] =
     new HttpDvdvClient[F](http, config)
 }

@@ -359,7 +359,9 @@ DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
 
 All constructors require a `given LoggerFactory[F]` in scope (the auth layer
-warns on degenerate token TTL/skew combinations) — see the
+warns on degenerate token TTL/skew combinations, and a 204 carrying the spec's
+`dvdv-warning-msg` header — an invalid matching service exists — is logged at
+warn) — see the
 [log4cats note](#many-certificates-by-alias-certmanager) at the end of the
 `utils` section for how to supply one.
 
@@ -398,6 +400,7 @@ val config = DvdvConfig(
     categoriesTtl               = 2.hours,     // override any subset
     findAuthorityDescriptionTtl = 15.minutes,
     verifyCategoryTtl           = 1.minute,
+    negativeTtl                 = 5.minutes,   // cap on caching a `None` miss
     purgeInterval               = 1.minute     // background purge cadence for expired entries
   )
 )
@@ -417,6 +420,8 @@ Default TTLs:
 | `findServiceDescription`, `findOrganizationsByServiceElement`       | 10 minutes  |
 | `verifyCategory`                                                    | 5 minutes   |
 | `serviceVersion`, all `batch*` POSTs                                | not cached  |
+
+Misses (`None`) from `findAuthorityDescription`, `findCertificateByFingerprint` and `findServiceDescription` are cached for at most `negativeTtl` (default: 5 minutes, never longer than the endpoint's TTL), so a newly onboarded authority or certificate becomes visible quickly.
 
 Expired entries are also purged by a background fiber every `purgeInterval` (default: 1 minute), scoped to the client `Resource`, so the caches do not grow unboundedly between accesses.
 

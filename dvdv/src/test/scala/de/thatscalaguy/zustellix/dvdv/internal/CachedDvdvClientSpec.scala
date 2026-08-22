@@ -130,14 +130,50 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
     } yield assertEquals(n, 2)
   }
 
+  test("a None result is re-fetched after negativeTtl, well before the endpoint TTL") {
+    val cfg = CacheConfig(findCertificateByFingerprintTtl = 10.seconds, negativeTtl = 50.millis)
+    for {
+      counter   <- Ref.of[IO, Int](0)
+      underlying = countingClient(counter) // cert lookup returns None
+      n         <- CachedDvdvClient.make[IO](underlying, cfg).use { cached =>
+                     cached.findCertificateByFingerprint(fp) *>
+                       cached.findCertificateByFingerprint(fp) *> // still cached
+                       IO.sleep(150.millis) *>
+                       cached.findCertificateByFingerprint(fp) *>
+                       counter.get
+                   }
+    } yield assertEquals(n, 2)
+  }
+
+  test("a Some result keeps the endpoint TTL past negativeTtl") {
+    val cfg  = CacheConfig(findCertificateByFingerprintTtl = 10.seconds, negativeTtl = 50.millis)
+    val cert = Certificate(fingerprint = Some(fp.value))
+    for {
+      counter   <- Ref.of[IO, Int](0)
+      underlying = countingClient(counter, certResult = IO.pure(Some(cert)))
+      results   <- CachedDvdvClient.make[IO](underlying, cfg).use { cached =>
+                     for {
+                       first  <- cached.findCertificateByFingerprint(fp)
+                       _      <- IO.sleep(150.millis)
+                       second <- cached.findCertificateByFingerprint(fp)
+                     } yield (first, second)
+                   }
+      n         <- counter.get
+    } yield {
+      assertEquals(results, (Some(cert), Some(cert)))
+      assertEquals(n, 1)
+    }
+  }
+
   test("background fiber purges an expired entry without re-access") {
+    val cfg = CacheConfig(findCertificateByFingerprintTtl = 50.millis, purgeInterval = 20.millis)
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
       deleted   <- Ref.of[IO, Int](0)
-      caches0   <- CachedDvdvClient.mkCaches[IO](CacheConfig(findCertificateByFingerprintTtl = 50.millis))
+      caches0   <- CachedDvdvClient.mkCaches[IO](cfg)
       caches     = caches0.copy(certByFpC = caches0.certByFpC.withOnDelete(_ => deleted.update(_ + 1)))
-      d         <- CachedDvdvClient.fromCaches(underlying, caches, purgeInterval = 20.millis).use { cached =>
+      d         <- CachedDvdvClient.fromCaches(underlying, caches, cfg).use { cached =>
                      cached.findCertificateByFingerprint(fp) *> IO.sleep(300.millis) *> deleted.get
                    }
       n         <- counter.get
@@ -148,13 +184,14 @@ class CachedDvdvClientSpec extends CatsEffectSuite {
   }
 
   test("purge fiber stops when the Resource is released") {
+    val cfg = CacheConfig(findCertificateByFingerprintTtl = 100.millis, purgeInterval = 20.millis)
     for {
       counter   <- Ref.of[IO, Int](0)
       underlying = countingClient(counter)
       deleted   <- Ref.of[IO, Int](0)
-      caches0   <- CachedDvdvClient.mkCaches[IO](CacheConfig(findCertificateByFingerprintTtl = 100.millis))
+      caches0   <- CachedDvdvClient.mkCaches[IO](cfg)
       caches     = caches0.copy(certByFpC = caches0.certByFpC.withOnDelete(_ => deleted.update(_ + 1)))
-      _         <- CachedDvdvClient.fromCaches(underlying, caches, purgeInterval = 20.millis).use { cached =>
+      _         <- CachedDvdvClient.fromCaches(underlying, caches, cfg).use { cached =>
                      cached.findCertificateByFingerprint(fp).void
                    }
       _         <- IO.sleep(300.millis) // entry expires, but the fiber is gone

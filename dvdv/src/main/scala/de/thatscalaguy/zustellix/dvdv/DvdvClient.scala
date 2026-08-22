@@ -96,7 +96,9 @@ object DvdvClient {
    *  Token + caches are scoped to this resource — each tenant gets its own.
    *
    *  All constructors need a `LoggerFactory[F]` in scope for the auth layer's
-   *  warnings — e.g. log4cats' `Slf4jFactory`, or `NoOpFactory` in tests.
+   *  warnings and for the warning logged when a 204 carries the spec's
+   *  `dvdv-warning-msg` header — e.g. log4cats' `Slf4jFactory`, or
+   *  `NoOpFactory` in tests.
    */
   def resource[F[_]: Async: Network: LoggerFactory](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {

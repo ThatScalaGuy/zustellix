@@ -11,11 +11,15 @@ import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
 
 import java.nio.file.Paths
 import java.time.Instant
 
 class RevocationSpec extends CatsEffectSuite {
+
+  private given LoggerFactory[IO] = NoOpFactory[IO]
 
   private def resourcePath(name: String) =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)

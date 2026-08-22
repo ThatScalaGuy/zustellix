@@ -25,7 +25,7 @@ object CachedDvdvClient {
    */
   def make[F[_]: Async](underlying: DvdvClient[F], cfg: CacheConfig): Resource[F, DvdvClient[F]] =
     if (!cfg.enabled) Resource.pure(underlying)
-    else Resource.eval(mkCaches[F](cfg)).flatMap(cs => fromCaches(underlying, cs, cfg.purgeInterval))
+    else Resource.eval(mkCaches[F](cfg)).flatMap(cs => fromCaches(underlying, cs, cfg))
 
   private[internal] final case class Caches[F[_]](
       categoriesC:           MemoryCache[F, Unit, List[DirectoryOrganizationCategoryLevel1DTO]],
@@ -113,10 +113,10 @@ object CachedDvdvClient {
   private[internal] def fromCaches[F[_]: Async](
       underlying: DvdvClient[F],
       caches: Caches[F],
-      purgeInterval: FiniteDuration
+      cfg: CacheConfig
   ): Resource[F, DvdvClient[F]] =
     Resource.eval(mkFlights[F]).flatMap { fl =>
-      purgeLoop(purgeInterval, caches.purgeAll).background.as(new Impl[F](underlying, caches, fl))
+      purgeLoop(cfg.purgeInterval, caches.purgeAll).background.as(new Impl[F](underlying, caches, fl, cfg))
     }
 
   // A failed purge pass never kills the loop; the error is dropped because
@@ -137,7 +137,29 @@ object CachedDvdvClient {
       c: MemoryCache[F, K, V],
       inFlight: InFlight[F, K, V],
       k: K
-  )(compute: F[V])(using F: Concurrent[F]): F[V] =
+  )(compute: F[V])(using Concurrent[F]): F[V] =
+    cachedWith(c, inFlight, k)(compute)(c.insert(k, _))
+
+  // Like `cached`, but a None result is inserted with the shorter negative
+  // TTL so a premature lookup does not hide a newly onboarded entry for the
+  // full endpoint TTL.
+  private def cachedOpt[F[_], K, V](
+      c: MemoryCache[F, K, Option[V]],
+      inFlight: InFlight[F, K, Option[V]],
+      k: K,
+      negTtl: TimeSpec
+  )(compute: F[Option[V]])(using Concurrent[F]): F[Option[V]] =
+    cachedWith(c, inFlight, k)(compute) {
+      case some @ Some(_) => c.insert(k, some)
+      // insertWithTimeout(None, ..) would mean never-expire, not the default
+      case None           => c.insertWithTimeout(Some(negTtl))(k, None)
+    }
+
+  private def cachedWith[F[_], K, V](
+      c: MemoryCache[F, K, V],
+      inFlight: InFlight[F, K, V],
+      k: K
+  )(compute: F[V])(insert: V => F[Unit])(using F: Concurrent[F]): F[V] =
     c.lookup(k).flatMap {
       case Some(v) => v.pure[F]
       case None =>
@@ -145,7 +167,7 @@ object CachedDvdvClient {
           F.deferred[Either[Throwable, V]].flatMap { d =>
             def settle(r: Either[Throwable, V]): F[Unit] =
               d.complete(r).void *>
-                r.traverse_(v => c.insert(k, v)) *>
+                r.traverse_(insert) *>
                 inFlight.update(_ - k)
 
             inFlight.modify { m =>
@@ -166,8 +188,17 @@ object CachedDvdvClient {
   private final class Impl[F[_]: Concurrent](
       underlying: DvdvClient[F],
       c: Caches[F],
-      f: Flights[F]
+      f: Flights[F],
+      cfg: CacheConfig
   ) extends DvdvClient[F] {
+
+    // Capped at the endpoint TTL so a miss is never cached longer than a hit.
+    private def negTtlFor(endpointTtl: FiniteDuration): TimeSpec =
+      TimeSpec.unsafeFromDuration(cfg.negativeTtl min endpointTtl)
+
+    private val authDescriptionNegTtl = negTtlFor(cfg.findAuthorityDescriptionTtl)
+    private val certByFpNegTtl        = negTtlFor(cfg.findCertificateByFingerprintTtl)
+    private val serviceDescNegTtl     = negTtlFor(cfg.findServiceDescriptionTtl)
 
     def categories: F[List[DirectoryOrganizationCategoryLevel1DTO]] =
       cached(c.categoriesC, f.categories, ())(underlying.categories)
@@ -179,7 +210,7 @@ object CachedDvdvClient {
       underlying.serviceVersion // not cached
 
     def findAuthorityDescription(category: Category, organizationKey: OrganizationKey): F[Option[OrganizationDescription]] =
-      cached(c.authDescriptionC, f.authDescription, (category, organizationKey))(
+      cachedOpt(c.authDescriptionC, f.authDescription, (category, organizationKey), authDescriptionNegTtl)(
         underlying.findAuthorityDescription(category, organizationKey)
       )
 
@@ -194,7 +225,7 @@ object CachedDvdvClient {
       )
 
     def findCertificateByFingerprint(fingerPrint: Fingerprint): F[Option[Certificate]] =
-      cached(c.certByFpC, f.certByFp, fingerPrint)(
+      cachedOpt(c.certByFpC, f.certByFp, fingerPrint, certByFpNegTtl)(
         underlying.findCertificateByFingerprint(fingerPrint)
       )
 
@@ -217,7 +248,7 @@ object CachedDvdvClient {
       )
 
     def findServiceDescription(organizationKey: OrganizationKey, serviceSpecificationUri: String): F[Option[Service]] =
-      cached(c.serviceDescC, f.serviceDesc, (organizationKey, serviceSpecificationUri))(
+      cachedOpt(c.serviceDescC, f.serviceDesc, (organizationKey, serviceSpecificationUri), serviceDescNegTtl)(
         underlying.findServiceDescription(organizationKey, serviceSpecificationUri)
       )
 

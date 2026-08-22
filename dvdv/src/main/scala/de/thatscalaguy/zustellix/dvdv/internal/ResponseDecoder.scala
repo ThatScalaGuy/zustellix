@@ -8,10 +8,17 @@ import io.circe.Decoder
 import io.circe.parser.decode
 import org.http4s.{Response, Status}
 import org.http4s.headers.`Retry-After`
+import org.typelevel.ci.CIString
+import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.*
 
 object ResponseDecoder {
+
+  // Per dvdv-api.yaml, this header on a 204 signals that an INVALID matching
+  // service exists (RFC-2047-encoded message) — the only way to distinguish
+  // "no service" from "service exists but invalid".
+  private val WarningHeader = CIString("dvdv-warning-msg")
 
   def required[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F]): F[A] =
     resp.status.code match {
@@ -19,10 +26,10 @@ object ResponseDecoder {
       case _                        => raiseError[F, A](resp)
     }
 
-  def optional[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F]): F[Option[A]] =
+  def optional[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F], log: Logger[F]): F[Option[A]] =
     resp.status match {
       case Status.NoContent =>
-        Concurrent[F].pure(None)
+        logNoContentWarning(endpoint, resp, log).as(None)
       case Status.NotFound =>
         // For findCertificateByFingerprint, 404 = not found (return None).
         // For other endpoints we surface NotFound — caller decides via .optional vs .required.
@@ -34,6 +41,11 @@ object ResponseDecoder {
         }
       case _ =>
         raiseError[F, Option[A]](resp)
+    }
+
+  private def logNoContentWarning[F[_]: Concurrent](endpoint: String, resp: Response[F], log: Logger[F]): F[Unit] =
+    resp.headers.get(WarningHeader).traverse_ { hs =>
+      log.warn(s"$endpoint returned 204 with $WarningHeader: ${hs.head.value}")
     }
 
   private def decodeBody[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F]): F[A] =

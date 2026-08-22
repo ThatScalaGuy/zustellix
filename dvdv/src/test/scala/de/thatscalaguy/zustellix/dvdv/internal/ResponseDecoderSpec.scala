@@ -8,10 +8,14 @@ import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.circe.jsonEncoder
 import org.typelevel.ci.CIString
+import org.typelevel.log4cats.noop.NoOpLogger
+import org.typelevel.log4cats.testing.StructuredTestingLogger
 
 import scala.concurrent.duration.*
 
 class ResponseDecoderSpec extends CatsEffectSuite {
+
+  private val noopLog = NoOpLogger[IO]
 
   test("200 with a non-decoding body raises DecodingError, not TransportError") {
     val resp = Response[IO](Status.Ok).withEntity("""{"nope": true}""")
@@ -26,7 +30,7 @@ class ResponseDecoderSpec extends CatsEffectSuite {
 
   test("optional: 200 with a non-decoding body raises DecodingError with the endpoint label") {
     val resp = Response[IO](Status.Ok).withEntity("not json at all")
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).attempt.map {
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).attempt.map {
       case Left(DvdvError.DecodingError(endpoint, cause)) =>
         assertEquals(endpoint, "findservicedescription")
         assert(clue(cause).getMessage.nonEmpty)
@@ -36,42 +40,72 @@ class ResponseDecoderSpec extends CatsEffectSuite {
 
   test("optional: 200 with Content-Length: 0 returns None") {
     val resp = Response[IO](Status.Ok).withEntity("")
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).map { r =>
       assertEquals(r, None)
     }
   }
 
   test("optional: 200 with an empty body and no Content-Length returns None") {
     val resp = Response[IO](Status.Ok)
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).map { r =>
       assertEquals(r, None)
     }
   }
 
   test("optional: 200 with a whitespace-only body returns None") {
     val resp = Response[IO](Status.Ok).withEntity(" \n")
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).map { r =>
       assertEquals(r, None)
     }
   }
 
   test("optional: 204 returns None") {
     val resp = Response[IO](Status.NoContent)
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).map { r =>
       assertEquals(r, None)
+    }
+  }
+
+  test("optional: 204 with dvdv-warning-msg logs the header value at warn") {
+    val encoded = "=?UTF-8?Q?ung=C3=BCltig?="
+    val logger  = StructuredTestingLogger.impl[IO]()
+    val resp = Response[IO](Status.NoContent)
+      .putHeaders(Header.Raw(CIString("dvdv-warning-msg"), encoded))
+    for {
+      r      <- ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, logger)
+      logged <- logger.logged
+    } yield {
+      assertEquals(r, None)
+      val warns = logged.collect { case w: StructuredTestingLogger.WARN => w.message }
+      assert(
+        warns.exists(m => m.contains(encoded) && m.contains("findservicedescription")),
+        s"expected a warn with the header value and endpoint, got: ${logged.mkString("; ")}"
+      )
+    }
+  }
+
+  test("optional: 204 without dvdv-warning-msg logs nothing") {
+    val logger = StructuredTestingLogger.impl[IO]()
+    val resp   = Response[IO](Status.NoContent)
+    for {
+      r      <- ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, logger)
+      logged <- logger.logged
+    } yield {
+      assertEquals(r, None)
+      assert(logged.isEmpty, s"expected no log entries, got: ${logged.mkString("; ")}")
     }
   }
 
   test("optional: 404 returns None") {
     val resp = Response[IO](Status.NotFound)
-    ResponseDecoder.optional[IO, List[String]]("findCertificateByFingerprint", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findCertificateByFingerprint", resp, noopLog).map { r =>
       assertEquals(r, None)
     }
   }
 
   test("optional: 200 with a decodable body returns Some") {
     val resp = Response[IO](Status.Ok).withEntity("""["a","b"]""")
-    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp).map { r =>
+    ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog).map { r =>
       assertEquals(r, Some(List("a", "b")))
     }
   }

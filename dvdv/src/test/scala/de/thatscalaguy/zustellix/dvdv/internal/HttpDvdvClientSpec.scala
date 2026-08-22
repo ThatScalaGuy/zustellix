@@ -11,6 +11,10 @@ import org.http4s.circe.CirceEntityCodec.{circeEntityDecoder, circeEntityEncoder
 import org.http4s.client.Client
 import org.http4s.dsl.io.*
 import org.http4s.implicits.uri
+import org.typelevel.ci.CIString
+import org.typelevel.log4cats.LoggerFactory
+import org.typelevel.log4cats.noop.NoOpFactory
+import org.typelevel.log4cats.testing.TestingLoggerFactory
 
 import java.nio.file.Paths
 
@@ -24,8 +28,13 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
     certSource = Some(CertSource.Pkcs12(resourcePath("test-cert.p12"), "test"))
   )
 
-  private def client(routes: HttpRoutes[IO]): HttpDvdvClient[IO] =
+  private def client(
+      routes: HttpRoutes[IO],
+      lf: LoggerFactory[IO] = NoOpFactory[IO]
+  ): HttpDvdvClient[IO] = {
+    given LoggerFactory[IO] = lf
     HttpDvdvClient[IO](Client.fromHttpApp(routes.orNotFound), config)
+  }
 
   test("findAuthorityDescription decodes 200 and 204") {
     val routes = HttpRoutes.of[IO] {
@@ -42,6 +51,22 @@ class HttpDvdvClientSpec extends CatsEffectSuite {
     } yield {
       assert(hit.isDefined)
       assertEquals(miss, None)
+    }
+  }
+
+  test("findServiceDescription warns with the 204 dvdv-warning-msg header value") {
+    val encoded = "=?UTF-8?Q?ung=C3=BCltig?="
+    val routes = HttpRoutes.of[IO] {
+      case GET -> Root / "extern" / "standaloneauth" / "directory" / "v2" / "findservicedescription" :? _ =>
+        NoContent().map(_.putHeaders(Header.Raw(CIString("dvdv-warning-msg"), encoded)))
+    }
+    for {
+      lf    <- TestingLoggerFactory.ref[IO]()
+      r     <- client(routes, lf).findServiceDescription(OrganizationKey.unsafe("ags:00000001"), "spec-uri")
+      warns <- lf.logged.map(_.collect { case w: TestingLoggerFactory.Warn => w.message })
+    } yield {
+      assertEquals(r, None)
+      assert(warns.exists(_.contains(encoded)), warns.mkString("; "))
     }
   }
 

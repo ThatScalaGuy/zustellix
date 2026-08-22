@@ -4,6 +4,14 @@ import scala.concurrent.duration.*
 
 /** Per-endpoint TTLs for the [[DvdvClient]] response caches.
  *
+ *  `negativeTtl` caps how long a `None` result of the Option-returning
+ *  lookups (`findAuthorityDescription`, `findCertificateByFingerprint`,
+ *  `findServiceDescription`) is served from cache — effectively
+ *  `min(negativeTtl, endpoint TTL)`, so a miss is never cached longer than
+ *  a hit and a newly onboarded authority or certificate becomes visible
+ *  without waiting out the full endpoint TTL. Must be positive, like every
+ *  other TTL here.
+ *
  *  `purgeInterval` is the interval at which a background fiber, scoped to
  *  the client `Resource`, purges expired entries from all caches — bounding
  *  memory between accesses, since an expired entry is otherwise only
@@ -20,6 +28,7 @@ final case class CacheConfig(
     findServiceDescriptionTtl: FiniteDuration = 10.minutes,
     findOrganizationsByServiceElementTtl: FiniteDuration = 10.minutes,
     verifyCategoryTtl: FiniteDuration = 5.minutes,
+    negativeTtl: FiniteDuration = 5.minutes,
     purgeInterval: FiniteDuration = 1.minute,
     enabled: Boolean = true
 )
