@@ -212,9 +212,11 @@ class OsciBibBridgeIT extends CatsEffectSuite {
   }
 
   test("re-fetch by id after reception still returns the delivery") {
-    // Backs the README's at-least-once claim: deliveries remain fetchable by
-    // message id after their reception entry exists (intermediary retention
-    // permitting), so a crashed consumer can re-fetch unprocessed ids.
+    // Verifies the README's policy-dependent re-fetch claim against the
+    // configured intermediary: deliveries stay fetchable by message id after
+    // their reception entry exists, so a crashed consumer can re-fetch
+    // unprocessed ids. A pass covers this intermediary's retention policy
+    // only — the module cannot guarantee it for others.
     assume(mailboxReady, s"set ${mailboxVars.mkString(", ")} to run")
     val payload = s"<xml>it-${UUID.randomUUID()}</xml>"
     val cfg     = mailboxConfig

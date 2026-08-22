@@ -728,7 +728,9 @@ OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
 }
 ```
 
-A `pending` listing is capped at `fetchLimit`. When the mailbox holds more,
+`pending` lists deliveries oldest first — an order the intermediary's
+`FetchProcessCard` response produces, not one this module imposes. A
+`pending` listing is capped at `fetchLimit`. When the mailbox holds more,
 the intermediary flags the response with feedback code `3800` / `3801` —
 surfaced as `PendingPage.truncated` (the raw entries are in
 `PendingPage.warnings`). Since fetching acknowledges (see below), fetch the
@@ -775,13 +777,22 @@ must not lose a message to a crash mid-sweep.
 **Acknowledgement semantics.** OSCI 1.2 has no separate ack message — a
 successful `fetch` makes the intermediary record a *reception* entry on the
 message's process card, which removes it from `pending`. The fetch **is** the
-acknowledgement: an un-acked (never fetched) message keeps showing up in
-`pending`, a fetched one never does.
+acknowledgement — there is no peek-without-ack: an un-acked (never fetched)
+message keeps showing up in `pending`, a fetched one never does.
 
 **At-least-once processing** is the caller's to build, and the API is shaped
 for it: persist the `messageId`s from `pending` *before* fetching, and after a
-crash re-`fetch` the unprocessed ids directly — deliveries remain stored at
-the intermediary after reception (subject to its retention policy).
+crash re-`fetch` the unprocessed ids directly. Whether a re-`fetch` still
+finds a delivery once its reception entry exists is the intermediary's
+retention policy — this module cannot verify it. The gated integration test
+(`OsciBibBridgeIT`, "re-fetch by id after reception still returns the
+delivery", enabled via the `OSCI_IT_MAILBOX_*` variables) asserts
+re-fetchability; treat the guarantee as verified only against intermediaries
+that test has been run against. The possible loss window is between `fetch`
+and durable processing by the caller: against an intermediary that purges on
+reception, a crash there loses the message. Callers needing a stronger
+guarantee should persist the raw message immediately on receipt, before any
+further processing.
 
 One mailbox can serve several profiles; filter on `PendingDelivery.subject`
 client-side if you need to split them.
