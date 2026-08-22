@@ -1,5 +1,7 @@
 # zustellix
 
+[![Maven Central](https://img.shields.io/maven-central/v/de.thatscalaguy/zustellix-utils_3)](https://central.sonatype.com/artifact/de.thatscalaguy/zustellix-utils_3)
+
 A typed, **tagless-final Scala 3** toolkit for the German public-administration
 messaging stack:
 
@@ -55,11 +57,11 @@ osci ──▶ dvdv ──▶ utils
 
 ```scala
 // build.sbt — pick the module you need (transitive deps are pulled in)
-libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.3.0"
 // or just the directory client:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.3.0"
 // or only the cert utilities:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.3.0"
 ```
 
 > **Migrating from 0.1.x:** `zustellix-osci-xmeld` is frozen at 0.1.1 and
