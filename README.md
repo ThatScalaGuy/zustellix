@@ -881,6 +881,13 @@ OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO], myTranspor
 OsciMailbox.resource[IO](mailboxConfig, cert, myTransport)
 ```
 
+`OsciHttpTransport` opens plain `HttpURLConnection`s via `URL.openConnection()`,
+so outbound proxies are honored only through the JVM's default `ProxySelector` —
+i.e. the standard proxy system properties (`https.proxyHost` / `https.proxyPort`,
+`http.proxyHost` / `http.proxyPort`, `http.nonProxyHosts`, or
+`java.net.useSystemProxies`). Anything richer — PAC scripts, per-route proxies,
+proxy authentication — needs a custom `TransportI` as shown above.
+
 ### Multi-tenant facade
 
 `OsciFacade` dispatches `request` / `send` by tenant. Build it from a
