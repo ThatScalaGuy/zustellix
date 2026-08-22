@@ -29,11 +29,13 @@ object ResponseDecoder {
   def optional[F[_]: Concurrent, A: Decoder](endpoint: String, resp: Response[F], log: Logger[F]): F[Option[A]] =
     resp.status match {
       case Status.NoContent =>
-        logNoContentWarning(endpoint, resp, log).as(None)
+        // drain the unread body (best-effort) so the connection can be reused
+        logNoContentWarning(endpoint, resp, log) *> resp.body.compile.drain.attempt.as(None)
       case Status.NotFound =>
         // For findCertificateByFingerprint, 404 = not found (return None).
         // For other endpoints we surface NotFound — caller decides via .optional vs .required.
-        Concurrent[F].pure(None)
+        // The body is drained (best-effort) so the connection can be reused.
+        resp.body.compile.drain.attempt.as(None)
       case s if s.code >= 200 && s.code < 300 =>
         resp.bodyText.compile.string.flatMap { body =>
           if (body.isBlank) Concurrent[F].pure(None)

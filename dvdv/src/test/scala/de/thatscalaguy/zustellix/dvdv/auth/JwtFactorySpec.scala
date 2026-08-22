@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.IO
+import cats.effect.testkit.TestControl
 import de.thatscalaguy.zustellix.dvdv.DvdvConfig
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertSource}
 import io.circe.parser.parse
@@ -48,6 +49,21 @@ class JwtFactorySpec extends CatsEffectSuite {
       assert(claim.expiration.isDefined)
       assertEquals(claim.expiration.get - claim.issuedAt.get, 60L)
       assert(claim.jwtId.isDefined)
+    }
+  }
+
+  test("iat/nbf/exp come from the effect clock") {
+    for {
+      // cert loading stays outside the mocked runtime — it does real I/O
+      loaded <- CertLoader.load[IO](cfg.certSource.get)
+      token  <- TestControl.executeEmbed(IO.sleep(1234.seconds) *> JwtFactory.make[IO](cfg, loaded, tokenEp))
+    } yield {
+      // exp/nbf validation must stay off: the pinned claims sit at the epoch,
+      // far in the past relative to the real clock
+      val claim = Jwt.decode(token, JwtOptions(signature = false, expiration = false, notBefore = false)).get
+      assertEquals(claim.issuedAt, Some(1234L))
+      assertEquals(claim.notBefore, Some(1234L))
+      assertEquals(claim.expiration, Some(1294L))
     }
   }
 

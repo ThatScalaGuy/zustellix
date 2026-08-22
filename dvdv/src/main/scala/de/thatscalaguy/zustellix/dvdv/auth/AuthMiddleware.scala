@@ -25,9 +25,10 @@ object AuthMiddleware {
               val authed = req.putHeaders(Header.Raw(CIString("Authorization"), s"EmbeddedBearer $tok"))
               swapIn(hotswap, underlying.run(authed)).flatMap { resp =>
                 if (resp.status == Status.Unauthorized && canRetry)
-                  // release the 401's pool slot before the retry (which may
-                  // itself fetch a token through the same underlying client)
-                  hotswap.clear *> tokens.invalidate(tok) *> run(canRetry = false)
+                  // drain the 401's body (best-effort) so the connection can be
+                  // reused, then release its pool slot before the retry (which
+                  // may itself fetch a token through the same underlying client)
+                  resp.body.compile.drain.attempt *> hotswap.clear *> tokens.invalidate(tok) *> run(canRetry = false)
                 else
                   resp.pure[F]
               }

@@ -88,7 +88,7 @@ object FailoverClient {
       // part of the caller's resource scope, so cancellation cannot leak it.
       NonEmptyHotswap.empty[F, Either[Throwable, Response[F]]].flatMap { hotswap =>
         Resource.eval {
-          Clock[F].realTime.flatMap { now =>
+          Clock[F].monotonic.flatMap { now =>
             // Decide once per request whether recovery is due, advancing the
             // recover deadline as a side effect (matches shallAttemptRecover).
             state.modify { s =>
@@ -109,7 +109,9 @@ object FailoverClient {
                 hotswap.clear *> swapIn(hotswap, underlying.run(routed).attempt).flatMap {
                   case Right(resp) if resp.status.code >= 500 =>
                     if (isLast) markFailedOver(state, serverIndex, now + recoverAfter).as(resp)
-                    else go(i + 1)
+                    // drain the discarded 5xx body (best-effort) so the pooled
+                    // connection can be reused instead of killed
+                    else resp.body.compile.drain.attempt *> go(i + 1)
                   case Right(resp) =>
                     markAnswered(state, serverIndex, now + recoverAfter).as(resp)
                   case Left(err) =>

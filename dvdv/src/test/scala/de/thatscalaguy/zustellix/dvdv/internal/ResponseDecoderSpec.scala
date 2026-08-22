@@ -2,6 +2,7 @@ package de.thatscalaguy.zustellix.dvdv.internal
 
 import cats.effect.IO
 import de.thatscalaguy.zustellix.dvdv.DvdvError
+import fs2.Stream
 import de.thatscalaguy.zustellix.dvdv.model.Problem
 import io.circe.syntax.*
 import munit.CatsEffectSuite
@@ -100,6 +101,34 @@ class ResponseDecoderSpec extends CatsEffectSuite {
     val resp = Response[IO](Status.NotFound)
     ResponseDecoder.optional[IO, List[String]]("findCertificateByFingerprint", resp, noopLog).map { r =>
       assertEquals(r, None)
+    }
+  }
+
+  test("optional: 404 body is drained") {
+    for {
+      consumed <- IO.ref(false)
+      resp = Response[IO](Status.NotFound).withBodyStream(
+        Stream.emits("gone".getBytes.toSeq).covary[IO] ++ Stream.exec(consumed.set(true))
+      )
+      r <- ResponseDecoder.optional[IO, List[String]]("findCertificateByFingerprint", resp, noopLog)
+      d <- consumed.get
+    } yield {
+      assertEquals(r, None)
+      assert(d, "expected the 404 body to be fully consumed")
+    }
+  }
+
+  test("optional: 204 body is drained") {
+    for {
+      consumed <- IO.ref(false)
+      resp = Response[IO](Status.NoContent).withBodyStream(
+        Stream.emits("stray".getBytes.toSeq).covary[IO] ++ Stream.exec(consumed.set(true))
+      )
+      r <- ResponseDecoder.optional[IO, List[String]]("findservicedescription", resp, noopLog)
+      d <- consumed.get
+    } yield {
+      assertEquals(r, None)
+      assert(d, "expected the 204 body to be fully consumed")
     }
   }
 

@@ -1,6 +1,6 @@
 package de.thatscalaguy.zustellix.dvdv.auth
 
-import cats.effect.Sync
+import cats.effect.{Clock, Sync}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvConfig
 import de.thatscalaguy.zustellix.dvdv.DvdvError
@@ -11,7 +11,6 @@ import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 
 import java.security.PrivateKey
 import java.security.interfaces.{ECPrivateKey, RSAPrivateKey}
-import java.time.Instant
 import java.util.UUID
 
 object JwtFactory {
@@ -22,7 +21,7 @@ object JwtFactory {
    */
   def make[F[_]: Sync](config: DvdvConfig, loaded: LoadedCert, tokenEndpoint: Uri): F[String] =
     for {
-      now <- Sync[F].delay(Instant.now())
+      now <- Clock[F].realTimeInstant
       alg <- Sync[F].fromEither(algorithmFor(loaded.privateKey))
     } yield {
       val sub = s"fp:${loaded.fingerprintSha1Hex}"

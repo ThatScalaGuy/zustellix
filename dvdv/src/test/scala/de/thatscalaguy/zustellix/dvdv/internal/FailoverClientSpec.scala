@@ -5,6 +5,7 @@ import cats.effect.{IO, Ref}
 import cats.effect.kernel.Resource
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvError
+import fs2.Stream
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.client.Client
@@ -280,6 +281,29 @@ class FailoverClientSpec extends CatsEffectSuite {
         events.update(_ :+ s"release-$host")
       )
     }
+
+  test("failover drains the primary's 5xx body before contacting the secondary") {
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = Client.fromHttpApp(HttpApp[IO] { r =>
+      val host = hostOf(r)
+      events.update(_ :+ s"hit-$host") *> {
+        if (host == "primary")
+          IO(Response[IO](Status.InternalServerError).withBodyStream(
+            Stream.emits("boom".getBytes.toSeq).covary[IO] ++ Stream.exec(events.update(_ :+ "drained-primary"))
+          ))
+        else IO(Response[IO](Status.Ok))
+      }
+    })
+    for {
+      c   <- make(NonEmptyList(primary, List(secondary)))(backend)
+      st  <- c.status(req)
+      evs <- events.get
+    } yield {
+      assertEquals(st, Status.Ok)
+      // the 5xx body was fully consumed, and before the secondary was contacted
+      assertEquals(evs, List("hit-primary", "drained-primary", "hit-secondary"))
+    }
+  }
 
   test("failover releases the primary's 5xx response before contacting the secondary") {
     val events = Ref.unsafe[IO, List[String]](Nil)
