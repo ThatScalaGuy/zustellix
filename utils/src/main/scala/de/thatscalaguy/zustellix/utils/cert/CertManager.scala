@@ -48,12 +48,33 @@ object CertCredential {
       fromPem[F](src, keyPassword)
   }
 
-  private def fromPem[F[_]: Sync](src: CertSource, keyPassword: Option[String]): F[CertCredential] = {
-    val password = keyPassword.getOrElse(UUID.randomUUID().toString)
+  /** Repacks in-memory PEM material into an in-memory PKCS12 credential with an
+   *  explicit store password — for callers (e.g. multi-tenant setups feeding an
+   *  [[InMemoryCertManager]]) whose PEM comes from a secret manager but whose
+   *  keystore password is chosen independently of the key's.
+   *
+   *  `keyPassword` decrypts an encrypted PEM key (`None` for an unencrypted
+   *  one, same rules as [[CertSource.PemBytes]]); `storePassword` protects the
+   *  resulting keystore and is carried on the returned credential. Every
+   *  certificate in `cert` goes into the entry's chain, leaf-first. Parse
+   *  failures surface as [[CertLoader]]'s `IllegalArgumentException`, as with
+   *  [[fromSource]].
+   */
+  def fromPem[F[_]: Sync](
+      cert: Array[Byte],
+      key: Array[Byte],
+      keyPassword: Option[String],
+      storePassword: String
+  ): F[CertCredential] =
+    repack[F](CertSource.PemBytes(cert, key, keyPassword), storePassword)
+
+  private def fromPem[F[_]: Sync](src: CertSource, keyPassword: Option[String]): F[CertCredential] =
+    repack[F](src, keyPassword.getOrElse(UUID.randomUUID().toString))
+
+  private def repack[F[_]: Sync](src: CertSource, storePassword: String): F[CertCredential] =
     CertLoader.load[F](src).flatMap { loaded =>
-      Sync[F].blocking(CertCredential(packPkcs12(loaded, password), password))
+      Sync[F].blocking(CertCredential(packPkcs12(loaded, storePassword), storePassword))
     }
-  }
 
   /** One key entry ("key") whose password equals the store password — the
    *  layout [[CertLoader.loadPkcs12Bytes]] requires. The chain goes in

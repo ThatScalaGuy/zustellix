@@ -3,13 +3,15 @@ package de.thatscalaguy.zustellix.utils.cert
 import cats.effect.IO
 import munit.CatsEffectSuite
 
-import java.io.StringWriter
+import java.io.{ByteArrayInputStream, StringWriter}
 import java.math.BigInteger
 import java.nio.file.{Files, Paths}
 import java.security.cert.X509Certificate
-import java.security.{KeyPair, KeyPairGenerator}
+import java.security.interfaces.RSAPrivateKey
+import java.security.{KeyPair, KeyPairGenerator, KeyStore, PrivateKey}
 import java.util.Date
 import javax.security.auth.x500.X500Principal
+import scala.jdk.CollectionConverters.*
 
 class CertCredentialSpec extends CatsEffectSuite {
 
@@ -115,6 +117,77 @@ class CertCredentialSpec extends CatsEffectSuite {
     ).map(e => assert(e.getMessage.contains("No certificate found"), e.getMessage))
   }
 
+  // --- fromPem: PEM material -> PKCS12 with an explicit store password ---
+
+  test("fromPem output opens as a PKCS12 keystore holding the key and full chain") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert, material.caCert))
+      keyPem   <- IO.blocking(toPem(material.leafKey.getPrivate))
+      cred     <- CertCredential.fromPem[IO](certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None, Secret)
+      loaded   <- cred.loadedCert[IO]
+      ks       <- IO.blocking {
+                    val ks = KeyStore.getInstance("PKCS12")
+                    ks.load(new ByteArrayInputStream(cred.pkcs12), Secret.toCharArray)
+                    ks
+                  }
+    } yield {
+      assertEquals(cred.password, Secret)
+      assertEquals(ks.aliases().asScala.toList, List("key"))
+      assert(ks.entryInstanceOf("key", classOf[KeyStore.PrivateKeyEntry]))
+      assertEquals(
+        ks.getKey("key", Secret.toCharArray).asInstanceOf[RSAPrivateKey].getModulus,
+        material.leafKey.getPrivate.asInstanceOf[RSAPrivateKey].getModulus
+      )
+      val chain = ks.getCertificateChain("key").toList.map(_.asInstanceOf[X509Certificate])
+      assertEquals(
+        chain.map(_.getSubjectX500Principal),
+        List(new X500Principal("CN=chain-leaf"), new X500Principal("CN=chain-ca"))
+      )
+      assertEquals(loaded.certificate, material.leafCert)
+    }
+  }
+
+  test("fromPem separates the PEM key password from the PKCS12 store password") {
+    for {
+      material  <- mintChain()
+      certPem   <- IO.blocking(toPem(material.leafCert))
+      encKeyPem <- IO.blocking(toEncryptedPkcs8Pem(material.leafKey.getPrivate, "keypw"))
+      cred      <- CertCredential.fromPem[IO](
+                     certPem.getBytes("UTF-8"), encKeyPem.getBytes("UTF-8"), Some("keypw"), Secret
+                   )
+      loaded    <- cred.loadedCert[IO]
+      _         <- interceptIO[java.io.IOException](IO.blocking {
+                     KeyStore.getInstance("PKCS12").load(new ByteArrayInputStream(cred.pkcs12), "keypw".toCharArray)
+                   })
+    } yield {
+      assertEquals(cred.password, Secret)
+      assertEquals(loaded.privateKey.getAlgorithm, "RSA")
+    }
+  }
+
+  test("fromPem with the wrong key password fails") {
+    for {
+      material  <- mintChain()
+      certPem   <- IO.blocking(toPem(material.leafCert))
+      encKeyPem <- IO.blocking(toEncryptedPkcs8Pem(material.leafKey.getPrivate, "keypw"))
+      result    <- CertCredential.fromPem[IO](
+                     certPem.getBytes("UTF-8"), encKeyPem.getBytes("UTF-8"), Some("wrong"), Secret
+                   ).attempt
+    } yield assert(result.isLeft, result)
+  }
+
+  test("fromPem rejects an encrypted key without a keyPassword") {
+    for {
+      material  <- mintChain()
+      certPem   <- IO.blocking(toPem(material.leafCert))
+      encKeyPem <- IO.blocking(toEncryptedPkcs8Pem(material.leafKey.getPrivate, "keypw"))
+      e         <- interceptIO[IllegalArgumentException](
+                     CertCredential.fromPem[IO](certPem.getBytes("UTF-8"), encKeyPem.getBytes("UTF-8"), None, Secret)
+                   )
+    } yield assert(e.getMessage.contains("encrypted; keyPassword required"), e.getMessage)
+  }
+
   // --- Chain material minted in-test with BouncyCastle (no checked-in fixtures) ---
 
   private case class ChainMaterial(leafKey: KeyPair, leafCert: X509Certificate, caCert: X509Certificate)
@@ -158,6 +231,20 @@ class CertCredentialSpec extends CatsEffectSuite {
     val sw     = new StringWriter()
     val writer = new org.bouncycastle.openssl.jcajce.JcaPEMWriter(sw)
     try objects.foreach(writer.writeObject)
+    finally writer.close()
+    sw.toString
+  }
+
+  private def toEncryptedPkcs8Pem(key: PrivateKey, password: String): String = {
+    val encryptor = new org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder(
+      org.bouncycastle.openssl.PKCS8Generator.AES_256_CBC
+    )
+      .setProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
+      .setPassword(password.toCharArray)
+      .build()
+    val sw     = new StringWriter()
+    val writer = new org.bouncycastle.util.io.pem.PemWriter(sw)
+    try writer.writeObject(new org.bouncycastle.openssl.jcajce.JcaPKCS8Generator(key, encryptor))
     finally writer.close()
     sw.toString
   }

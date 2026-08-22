@@ -281,6 +281,14 @@ atomically — write to a temp file in the same directory, then
 otherwise be served from the retained previous credential until the write
 completes.
 
+`DirectoryCertManager` picks up `*.p12` files only — PEM files placed in the
+directory are ignored, since PKCS12 is the on-disk format both DVDV and OSCI
+consume. PEM material can still back a tenant: repack it in memory with
+`CertCredential.fromPem(cert, key, keyPassword, storePassword)` (or
+`CertCredential.fromSource` for any `CertSource`) and hand the resulting
+credential to `InMemoryCertManager`, or export it to a `.p12`
+(`openssl pkcs12 -export`) for the directory.
+
 `zustellix-utils`, `zustellix-dvdv` and `zustellix-osci` depend only on
 `log4cats-core`, so to use `Slf4jFactory` as shown above, add
 `org.typelevel::log4cats-slf4j` plus an SLF4J backend (e.g.
