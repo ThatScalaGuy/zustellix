@@ -73,6 +73,7 @@ lazy val dvdv = (project in file("dvdv"))
       "com.github.jwt-scala" %% "jwt-circe" % JwtScalaV,
       "org.typelevel" %% "log4cats-core" % Log4catsV,
       "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectV % Test,
       "org.http4s" %% "http4s-ember-server" % Http4sV % Test,
       "org.typelevel" %% "log4cats-noop" % Log4catsV % Test,
       "org.typelevel" %% "log4cats-testing" % Log4catsV % Test

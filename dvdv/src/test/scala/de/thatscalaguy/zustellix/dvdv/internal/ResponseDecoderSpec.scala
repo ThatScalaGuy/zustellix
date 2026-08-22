@@ -7,6 +7,9 @@ import io.circe.syntax.*
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.circe.jsonEncoder
+import org.typelevel.ci.CIString
+
+import scala.concurrent.duration.*
 
 class ResponseDecoderSpec extends CatsEffectSuite {
 
@@ -104,6 +107,30 @@ class ResponseDecoderSpec extends CatsEffectSuite {
         assertEquals(body, "boom")
         assertEquals(problem, None)
       case other => fail(s"expected ServerError, got $other")
+    }
+  }
+
+  test("429 with a delta-seconds Retry-After maps to RateLimited") {
+    val problem = Problem(title = Some("slow down"), status = Some(429))
+    val resp = Response[IO](Status.TooManyRequests)
+      .withEntity(problem.asJson)
+      .putHeaders(Header.Raw(CIString("Retry-After"), "7"))
+    ResponseDecoder.required[IO, List[String]]("categories", resp).attempt.map {
+      case Left(DvdvError.RateLimited(retryAfter, _, Some(p))) =>
+        assertEquals(retryAfter, Some(7.seconds))
+        assertEquals(p.title, Some("slow down"))
+      case other => fail(s"expected RateLimited with Some(problem), got $other")
+    }
+  }
+
+  test("429 without Retry-After carries retryAfter = None and the raw body") {
+    val resp = Response[IO](Status.TooManyRequests).withEntity("busy")
+    ResponseDecoder.required[IO, List[String]]("categories", resp).attempt.map {
+      case Left(DvdvError.RateLimited(retryAfter, body, problem)) =>
+        assertEquals(retryAfter, None)
+        assertEquals(body, "busy")
+        assertEquals(problem, None)
+      case other => fail(s"expected RateLimited, got $other")
     }
   }
 

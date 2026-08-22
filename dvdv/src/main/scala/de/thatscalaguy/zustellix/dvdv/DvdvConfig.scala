@@ -57,6 +57,17 @@ final case class DvdvConfig(
      *  budget.
      */
     requestTimeout: FiniteDuration = 30.seconds,
+    /** Outermost bound on one logical directory call: covers all failover
+     *  passes, retries, backoff/`Retry-After` sleeps and token fetches, and
+     *  raises `java.util.concurrent.TimeoutException` when exceeded. Separate
+     *  from the per-attempt [[requestTimeout]]. `None` disables the bound.
+     */
+    totalDeadline: Option[FiniteDuration] = Some(5.minutes),
+    /** Retry policy for transient failures (429/transient 5xx/transport
+     *  errors on idempotent GETs); each retry re-enters failover from the
+     *  top. See [[RetryConfig]]; disable via [[RetryConfig.disabled]].
+     */
+    retryConfig: RetryConfig = RetryConfig(),
     ignoreRevocation: Boolean = false,
     failoverServers: List[Uri] = Nil,
     recoverAfter: FiniteDuration = 180.seconds,

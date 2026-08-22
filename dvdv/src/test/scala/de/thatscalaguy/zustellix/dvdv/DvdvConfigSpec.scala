@@ -29,6 +29,14 @@ class DvdvConfigSpec extends FunSuite {
     assertEquals(cfg.copy(jwtLifetime = 1.second).defaultTokenTtl, 5.minutes)
   }
 
+  test("retries default on with a 5-minute total deadline; RetryConfig.disabled turns them off") {
+    val cfg = DvdvConfig(baseUri = uri"http://x")
+    assertEquals(cfg.retryConfig, RetryConfig())
+    assertEquals(cfg.retryConfig.maxRetries, 3)
+    assertEquals(cfg.totalDeadline, Some(5.minutes))
+    assertEquals(RetryConfig.disabled.maxRetries, 0)
+  }
+
   test("tokenUriFor is entry-path-independent") {
     val cfg = DvdvConfig(baseUri = uri"http://x", entryPath = DvdvEntryPath.InternDirectory)
     assertEquals(cfg.tokenUriFor(uri"http://x").renderString, "http://x/extern/standaloneauth/token")

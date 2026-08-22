@@ -4,6 +4,7 @@ import de.thatscalaguy.zustellix.dvdv.model.Problem
 import de.thatscalaguy.zustellix.dvdv.model.RevocationReason
 
 import java.time.Instant
+import scala.concurrent.duration.FiniteDuration
 
 sealed abstract class DvdvError(msg: String, cause: Throwable | Null = null) extends RuntimeException(msg, cause)
 
@@ -31,6 +32,15 @@ object DvdvError {
    */
   final case class ServerError(status: Int, body: String, problem: Option[Problem])
       extends DvdvError(s"Server error $status: $body")
+
+  /** A 429, surfaced only after the [[RetryConfig]] retry layer is exhausted
+   *  or disabled. `retryAfter` is parsed from the delta-seconds form of the
+   *  `Retry-After` header only — the HTTP-date form needs a clock and maps to
+   *  `None`. `problem` is `Some` only when the body parsed as an RFC 7807
+   *  Problem; the raw body is always kept.
+   */
+  final case class RateLimited(retryAfter: Option[FiniteDuration], body: String, problem: Option[Problem])
+      extends DvdvError(s"429 Too Many Requests${retryAfter.fold("")(d => s", retry after $d")}: $body")
 
   /** `rawDate` is the wire string verbatim; `date` is its parsed `Instant`,
    *  `None` when the date is absent or unparseable — construction never

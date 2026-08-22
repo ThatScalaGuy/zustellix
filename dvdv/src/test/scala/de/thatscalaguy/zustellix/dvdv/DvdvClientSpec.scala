@@ -1,6 +1,7 @@
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{IO, Ref}
+import cats.effect.testkit.TestControl
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{
   CertAlias,
@@ -194,7 +195,8 @@ class DvdvClientSpec extends CatsEffectSuite {
     baseUri        = uri"http://dvdv.test",
     entryPath      = DvdvEntryPath.InternDirectory, // no cert, no token POST
     requestTimeout = 200.millis,
-    cacheConfig    = CacheConfig.disabled
+    cacheConfig    = CacheConfig.disabled,
+    retryConfig    = RetryConfig.disabled // a per-attempt timeout is a retriable transport error
   )
 
   test("fromClient applies config.requestTimeout to the provided client") {
@@ -212,5 +214,59 @@ class DvdvClientSpec extends CatsEffectSuite {
                  DvdvClient.fromClient[IO](shortTimeoutCfg, hangingHttp, certs, alias).use(_.serviceVersion)
                )
     } yield ()
+  }
+
+  private def retryTestCfg(retryConfig: RetryConfig) = DvdvConfig(
+    baseUri     = uri"http://dvdv.test",
+    entryPath   = DvdvEntryPath.InternDirectory, // no cert, no token POST
+    cacheConfig = CacheConfig.disabled,
+    retryConfig = retryConfig
+  )
+
+  test("fromClient retries a transient 503 GET and succeeds on the next pass") {
+    for {
+      hits <- Ref.of[IO, Int](0)
+      backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+                  hits.getAndUpdate(_ + 1).flatMap { n =>
+                    if (n == 0) IO(Response[IO](Status.ServiceUnavailable))
+                    else Ok(Json.fromString("v1"))
+                  }
+                })
+      cfg = retryTestCfg(RetryConfig(baseDelay = 1.milli))
+      v   <- DvdvClient.fromClient[IO](cfg, backend).use(_.serviceVersion)
+      n   <- hits.get
+    } yield {
+      assertEquals(v.raw, Some("v1"))
+      assertEquals(n, 2)
+    }
+  }
+
+  test("batch POSTs are not retried: a 503 surfaces after a single backend hit") {
+    for {
+      hits <- Ref.of[IO, Int](0)
+      backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+                  hits.update(_ + 1).as(Response[IO](Status.ServiceUnavailable))
+                })
+      cfg = retryTestCfg(RetryConfig(baseDelay = 1.milli))
+      res <- DvdvClient.fromClient[IO](cfg, backend).use(_.batchFindCategories(List(model.Request()))).attempt
+      n   <- hits.get
+    } yield {
+      assert(res.left.exists(_.isInstanceOf[DvdvError.ServerError]), s"expected ServerError, got $res")
+      assertEquals(n, 1)
+    }
+  }
+
+  test("totalDeadline cuts off a long retry chain") {
+    TestControl.executeEmbed {
+      val backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+        IO(Response[IO](Status.ServiceUnavailable).putHeaders(Header.Raw(CIString("Retry-After"), "60")))
+      })
+      val cfg = retryTestCfg(RetryConfig(maxRetries = 100, baseDelay = 1.milli))
+        .copy(totalDeadline = Some(90.seconds)) // strictly between the 60s Retry-After sleeps
+      DvdvClient.fromClient[IO](cfg, backend).use(_.serviceVersion).attempt.map {
+        case Left(e: TimeoutException) => assert(e.getMessage.contains("total deadline"), e.getMessage)
+        case other                     => fail(s"expected a total-deadline TimeoutException, got $other")
+      }
+    }
   }
 }

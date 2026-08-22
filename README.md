@@ -372,7 +372,7 @@ cert once and keep it for the lifetime of the client.
 ### Configuration
 
 ```scala
-import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig, DvdvEntryPath}
+import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig, DvdvEntryPath, RetryConfig}
 import scala.concurrent.duration.*
 
 val config = DvdvConfig(
@@ -390,6 +390,9 @@ val config = DvdvConfig(
   tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry (clamped to at most half the token TTL)
   defaultTokenTtl  = 5.minutes,       // token lifetime assumed when the token response has no expires_in
   requestTimeout   = 30.seconds,      // per request attempt; applied by every constructor, incl. fromClient
+  retryConfig      = RetryConfig(),   // GET retries on 429/transient 5xx/transport errors: exp. backoff + jitter,
+                                      // honors Retry-After; RetryConfig.disabled turns it off
+  totalDeadline    = Some(5.minutes), // hard cap on one call incl. failover + retries; None disables
 
   cacheConfig = CacheConfig(
     categoriesTtl               = 2.hours,     // override any subset
@@ -492,6 +495,7 @@ dvdv.findAuthorityDescription(Category.unsafe("Meldebehörde"), OrganizationKey.
   case Left(DvdvError.NotFound(p))              => IO.println(s"404: ${p.detail}")
   case Left(DvdvError.ValidationError(p))       => IO.println(s"400: ${p.detail}")
   case Left(DvdvError.AuthenticationError(p))   => IO.println(s"401: ${p.detail}")
+  case Left(DvdvError.RateLimited(retryAfter, body, problem)) => IO.println(s"429 (after retries): $body")
   case Left(DvdvError.Unexpected(status, body, problem))  => IO.println(s"$status: $body")
   case Left(DvdvError.DecodingError(endpoint, cause))     => IO.println(s"$endpoint returned an undecodable body: $cause")
   case Left(DvdvError.TransportError(cause))              => IO.println(s"transport: $cause")
