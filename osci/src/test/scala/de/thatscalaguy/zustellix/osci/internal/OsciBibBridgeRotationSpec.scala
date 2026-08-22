@@ -111,7 +111,9 @@ class OsciBibBridgeRotationSpec extends CatsEffectSuite {
     for {
       certs <- InMemoryCertManager.make[IO](Map.empty[CertAlias, CertCredential])
       e     <- interceptIO[CertManagerError.UnknownCert](
-                 OsciBibBridge.resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn).use_
+                 OsciBibBridge
+                   .resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn, explicitDialog = false)
+                   .use_
                )
     } yield assertEquals(e.alias, alias)
   }
@@ -120,7 +122,9 @@ class OsciBibBridgeRotationSpec extends CatsEffectSuite {
     for {
       certs <- InMemoryCertManager.make[IO](Map(alias -> CertCredential(Array[Byte](1, 2, 3), "pw")))
       _     <- interceptIO[OsciError.Certificate](
-                 OsciBibBridge.resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn).use_
+                 OsciBibBridge
+                   .resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn, explicitDialog = false)
+                   .use_
                )
     } yield ()
   }

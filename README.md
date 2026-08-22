@@ -565,7 +565,7 @@ one:
 |-----------|-------------------|-------|
 | `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche), returns an `OsciResponse` |
 | `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
-| `OsciMailbox.pending` / `fetch`| `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie) |
+| `OsciMailbox.pending` / `fetch` / `drain` | `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie); `drain` batches listing + fetches into one dialog |
 
 Recipients are addressed by their `Ags` (amtlicher Gemeindeschlüssel) — an
 opaque type that only admits well-formed keys: `Ags.from("01001000")`
@@ -638,8 +638,11 @@ not close it.
 - `xml: Option[String]` — the recipient's decrypted (and per policy
   signature-checked) response payload; `None` when the answer carried no
   extractable content;
-- `messageId: String` — the intermediary-issued message id, the handle for
-  any later process-card inquiry;
+- `messageId: String` — empty by default: the default wire profile skips the
+  `GetMessageId` round trip. Set `OsciConfig(explicitDialog = true)` to get
+  an intermediary-issued id (the handle for any later process-card inquiry)
+  at the cost of an extra round trip — see
+  [Wire round trips](#wire-round-trips);
 - `status: String` — the top OSCI feedback code (e.g. `"0800"`);
 - `warnings: List[OsciFeedback]` — warning-class (`3xxx`) feedback, e.g.
   `3802` (see [OSCI feedback codes](#osci-feedback-codes)).
@@ -664,6 +667,27 @@ OsciClient.resource[IO](xfamConfig, dvdv, LaufzettelSink.console[IO]).use { osci
   }
 }
 ```
+
+### Wire round trips
+
+By default each operation uses the leanest OSCI dialog shape the protocol
+(and osci-bibliothek) allows:
+
+- `request` = `InitDialog` + `MediateDelivery` + `ExitDialog` (3 round
+  trips). osci-bibliothek cannot send a `MediateDelivery` in an implicit
+  dialog, so the dialog frame stays; the saving is the skipped
+  `GetMessageId` — which also means `OsciResponse.messageId` /
+  `Laufzettel.messageId` are empty, and no request process card is written
+  at the intermediary (OSCI ties the process card — and the `subject` — to
+  the message id).
+- `send` = `GetMessageId` + `StoreDelivery`, both in implicit dialogs (2
+  round trips). The receipt still carries the intermediary-issued
+  `messageId` — `StoreDelivery` requires one.
+
+`OsciConfig(explicitDialog = true)` restores the previous
+`GetMessageId` + `InitDialog` + delivery + `ExitDialog` flow (4 round trips)
+for both operations — use it when downstream systems key on `request`'s
+`messageId`, or for an intermediary that rejects implicit deliveries.
 
 ### Receiving: `OsciMailbox` (fetch + ack)
 
@@ -710,6 +734,43 @@ surfaced as `PendingPage.truncated` (the raw entries are in
 `PendingPage.warnings`). Since fetching acknowledges (see below), fetch the
 listed deliveries and call `pending` again for the next page; the count of a
 page alone cannot tell a full listing from a cut-off one.
+
+**Draining in one dialog.** Every `pending` / `fetch` call opens and closes
+its own OSCI dialog (`InitDialog` … `ExitDialog`), so emptying a mailbox of N
+messages that way costs 3 + 3N round trips. `drain(maxMessages)` batches the
+whole sweep into ONE dialog — `InitDialog` + `FetchProcessCard` + one
+`FetchDelivery` per message + `ExitDialog`, i.e. N+3 round trips:
+
+```scala
+OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
+  mailbox.drain(maxMessages = 50).flatMap { result =>
+    result.messages.traverse_ { msg =>
+      IO.println(s"${msg.messageId} [${msg.subject}]: ${msg.xml}")
+    } *>
+      result.failure.traverse_(f => IO.println(s"drain stopped at ${f.messageId}: ${f.error}")) *>
+      IO.println("more waiting, drain again").unlessA(result.complete)
+  }
+}
+```
+
+`MailboxDrain` carries the listed `page` (at most `min(fetchLimit,
+maxMessages)` process cards), the fetched `messages` in listing order, and an
+optional `failure`. The fetches acknowledge exactly like `fetch` does — which
+shapes the failure semantics: a failing fetch does **not** raise, because the
+messages fetched before it are already acknowledged at the intermediary and
+discarding them would lose acknowledged deliveries. Instead the drain stops,
+returns the partial result and reports the failed id on
+`MailboxDrain.failure` (deliveries never fetched stay pending for the next
+drain; the failed one may itself already be acknowledged — surface or persist
+the failure rather than waiting for a re-listing). `result.complete` is true
+when nothing failed, the listing was not truncated and every listed delivery
+was fetched. A failure of the *listing* (an `InitDialog` refusal, a
+`FetchProcessCard` error) raises like `pending` would.
+
+`drain` trades the strictest crash-safety for round trips: it cannot persist
+ids between listing and fetching, so the strict at-least-once pattern below
+(`pending` → persist ids → `fetch`) remains the choice for consumers that
+must not lose a message to a crash mid-sweep.
 
 **Acknowledgement semantics.** OSCI 1.2 has no separate ack message — a
 successful `fetch` makes the intermediary record a *reception* entry on the
@@ -846,6 +907,7 @@ tenant.flensburg.connectTimeoutMs = 5000
 tenant.flensburg.readTimeoutMs    = 60000
 tenant.flensburg.contentSignatures = require
 tenant.flensburg.capturePayloads   = true
+tenant.flensburg.explicitDialog    = false
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -858,7 +920,10 @@ Personensuche WSDL and `XMeld`; `connectTimeoutMs` / `readTimeoutMs` are
 optional and default to 10 s / 120 s; `contentSignatures` is optional —
 `require` or `warn`, default `warn`; `capturePayloads` is optional —
 `true` stores the decrypted response XML on `Laufzettel.rawXml`, default
-`false`, see [Laufzettel](#laufzettel).)
+`false`, see [Laufzettel](#laufzettel); `explicitDialog` is optional —
+`true` restores the 4-round-trip wire profile with an intermediary-issued
+`messageId` for `request`, default `false`, see
+[Wire round trips](#wire-round-trips).)
 
 `fromConfigs` is all-or-nothing: every tenant client is built eagerly when
 the resource is acquired, and a tenant whose cert fails to load fails the

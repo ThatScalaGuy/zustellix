@@ -3,8 +3,10 @@ package de.thatscalaguy.zustellix.osci.internal
 import de.thatscalaguy.zustellix.osci.{
   ContentSignaturePolicy,
   ContentSignatureStatus,
+  DrainFailure,
   OsciError,
-  OsciFeedback
+  OsciFeedback,
+  OsciMessage
 }
 import munit.FunSuite
 
@@ -501,6 +503,89 @@ class OsciBibSupportSpec extends FunSuite {
       }
       catch case _: InterruptedException => true
     assert(propagated, "expected the fatal exit exception to propagate")
+  }
+
+  // drainSequence is the fetch loop of OsciMailbox.drain — the offline seam
+  // for its sequencing, since a success-path wire fake is impossible (see
+  // OsciBibBridgeWireSpec). withExplicitDialog around it mirrors the bridge's
+  // one-dialog-per-batch structure.
+
+  private def message(id: String): OsciMessage =
+    OsciMessage(id, None, s"<xml>$id</xml>", None, None, ContentSignatureStatus.Unsigned)
+
+  test("drainSequence fetches min(N, max) ids in listing order and keeps the order in the result") {
+    val fetched = scala.collection.mutable.ListBuffer.empty[String]
+    val (msgs, failure) =
+      drainSequence(List("a", "b", "c"), 2, { id => fetched += id; message(id) })
+    assertEquals(fetched.toList, List("a", "b"))
+    assertEquals(msgs.map(_.messageId), List("a", "b"))
+    assertEquals(failure, None)
+
+    val (all, none) = drainSequence(List("a", "b"), 10, message)
+    assertEquals(all.map(_.messageId), List("a", "b"))
+    assertEquals(none, None)
+  }
+
+  test("drainSequence: empty ids yield no messages and no failure") {
+    assertEquals(drainSequence(Nil, 10, message), (Nil, None))
+  }
+
+  test("drainSequence stops at the first failing fetch, keeps prior messages and never touches later ids") {
+    val fetched = scala.collection.mutable.ListBuffer.empty[String]
+    val (msgs, failure) = drainSequence(
+      List("a", "b", "c"),
+      10,
+      { id =>
+        fetched += id
+        if id == "b" then throw OsciError.NoSuchMessage(id) else message(id)
+      }
+    )
+    assertEquals(fetched.toList, List("a", "b"))
+    assertEquals(msgs.map(_.messageId), List("a"))
+    assertEquals(failure, Some(DrainFailure("b", OsciError.NoSuchMessage("b"))))
+  }
+
+  test("drainSequence maps a non-OsciError fetch failure through toOsciError") {
+    val io = new java.io.IOException("connection reset")
+    val (msgs, failure) =
+      drainSequence(List("a"), 10, _ => throw io)
+    assertEquals(msgs, Nil)
+    failure match {
+      case Some(DrainFailure("a", e: OsciError.OsciTransport)) => assert(e.getCause eq io)
+      case other => fail(s"expected an OsciTransport DrainFailure, got $other")
+    }
+  }
+
+  test("drainSequence inside withExplicitDialog: init once, fetches in order, exit once — also after a failed fetch") {
+    def run(failOn: Option[String]): List[String] = {
+      val calls = scala.collection.mutable.ListBuffer.empty[String]
+      val out = withExplicitDialog(
+        () => { calls += "init"; Array(Array("de", "0801", "dialog ok")) },
+        () => { calls += "exit"; () }
+      ) {
+        drainSequence(
+          List("a", "b", "c"),
+          2,
+          { id =>
+            calls += s"fetch:$id"
+            if failOn.contains(id) then throw OsciError.NoSuchMessage(id) else message(id)
+          }
+        )
+      }
+      val (msgs, failure) = out
+      failOn match {
+        case None =>
+          assertEquals(msgs.map(_.messageId), List("a", "b"))
+          assertEquals(failure, None)
+        case Some(id) =>
+          assertEquals(failure.map(_.messageId), Some(id))
+      }
+      calls.toList
+    }
+    assertEquals(run(None), List("init", "fetch:a", "fetch:b", "exit"))
+    // The batch failure is part of the result, not an exception — the dialog
+    // still exits normally.
+    assertEquals(run(Some("a")), List("init", "fetch:a", "exit"))
   }
 
   test("parseInstant handles the offset xsd:dateTime form") {

@@ -110,6 +110,32 @@ class OsciBibBridgeIT extends CatsEffectSuite {
                   .resource[IO](certSource, transport, ContentSignaturePolicy.Warn)
                   .use(_.mediate(route, "zustellix-it", s"<xml>it-${UUID.randomUUID()}</xml>"))
     } yield {
+      // The default wire profile fetches no message id (3 round trips:
+      // InitDialog + MediateDelivery + ExitDialog) — see the explicitDialog
+      // variant below for the id-carrying flow.
+      assert(result.status.startsWith("0"), s"expected a success status, got $result")
+      assert(result.responseXml.exists(_.nonEmpty), s"expected response content, got $result")
+    }
+  }
+
+  test("mediate with explicitDialog carries an intermediary-issued messageId") {
+    assume(mediateReady, s"set ${mediateVars.mkString(", ")} to run")
+    val gatewayUri = URI.create(env("OSCI_IT_GATEWAY"))
+    for {
+      ownCipher <- ownCipherCert
+      route = OsciRoute(
+                addresseeUri    = sys.env.get("OSCI_IT_ADDRESSEE_URI")
+                                    .map(URI.create).getOrElse(gatewayUri),
+                addresseeCipher = sys.env.get("OSCI_IT_ADDRESSEE_CERT")
+                                    .map(loadX509).getOrElse(ownCipher),
+                addresseeSig    = None,
+                intermedUri     = gatewayUri,
+                intermedCipher  = loadX509(env("OSCI_IT_GATEWAY_CERT"))
+              )
+      result <- OsciBibBridge
+                  .resource[IO](certSource, transport, ContentSignaturePolicy.Warn, explicitDialog = true)
+                  .use(_.mediate(route, "zustellix-it", s"<xml>it-${UUID.randomUUID()}</xml>"))
+    } yield {
       assert(result.messageId.nonEmpty, s"expected a messageId, got $result")
       assert(result.status.startsWith("0"), s"expected a success status, got $result")
       assert(result.responseXml.exists(_.nonEmpty), s"expected response content, got $result")
@@ -144,6 +170,42 @@ class OsciBibBridgeIT extends CatsEffectSuite {
         _ = assert(
               !after.deliveries.exists(_.messageId == receipt.messageId),
               s"'${receipt.messageId}' still pending after fetch"
+            )
+      } yield ()
+    }
+  }
+
+  test("drain fetches and acknowledges pending deliveries in one dialog") {
+    assume(mailboxReady, s"set ${mailboxVars.mkString(", ")} to run")
+    val payloadA = s"<xml>it-${UUID.randomUUID()}</xml>"
+    val payloadB = s"<xml>it-${UUID.randomUUID()}</xml>"
+    val cfg      = mailboxConfig
+    (
+      OsciBibBridge.resource[IO](certSource, transport, ContentSignaturePolicy.Warn),
+      OsciMailbox.resource[IO](cfg, certSource, transport)
+    ).tupled.use { case (bridge, mailbox) =>
+      for {
+        ownCipher <- ownCipherCert
+        rcptA     <- bridge.store(loopbackRoute(cfg, ownCipher), "zustellix-it", payloadA)
+        rcptB     <- bridge.store(loopbackRoute(cfg, ownCipher), "zustellix-it", payloadB)
+        result    <- mailbox.drain(50)
+        _ = assert(result.failure.isEmpty, s"drain failed: ${result.failure}")
+        byId = result.messages.map(m => m.messageId -> m).toMap
+        _ = assert(
+              byId.contains(rcptA.messageId) && byId.contains(rcptB.messageId),
+              s"expected ${rcptA.messageId} and ${rcptB.messageId} in ${byId.keys}"
+            )
+        _ = assertEquals(byId(rcptA.messageId).xml, payloadA)
+        _ = assertEquals(byId(rcptB.messageId).xml, payloadB)
+        _ = assertEquals(byId(rcptA.messageId).signature, ContentSignatureStatus.Valid)
+        _ = assertEquals(byId(rcptB.messageId).signature, ContentSignatureStatus.Valid)
+        // The fetches inside the drain acknowledged both deliveries.
+        after <- mailbox.pending
+        _ = assert(
+              !after.deliveries.exists(p =>
+                p.messageId == rcptA.messageId || p.messageId == rcptB.messageId
+              ),
+              s"drained deliveries still pending: ${after.deliveries.map(_.messageId)}"
             )
       } yield ()
     }

@@ -3,8 +3,10 @@ package de.thatscalaguy.zustellix.osci.internal
 import de.thatscalaguy.zustellix.osci.{
   ContentSignaturePolicy,
   ContentSignatureStatus,
+  DrainFailure,
   OsciError,
-  OsciFeedback
+  OsciFeedback,
+  OsciMessage
 }
 
 import de.osci.osci12.OSCIException
@@ -207,6 +209,31 @@ private[osci] object OsciBibSupport {
     }
   }
 
+  /** The fetch loop of a mailbox drain: walks `ids` (at most `max`) in
+   *  listing order, fetching each via `fetchOne`. A fetch that throws stops
+   *  the loop — the messages fetched before it are kept (they are already
+   *  acknowledged at the intermediary) and the failure is mapped via
+   *  [[toOsciError]] into the returned [[DrainFailure]]; later ids are never
+   *  touched. Lives here as the unit-testable seam for the drain's
+   *  sequencing — a success-path wire fake is impossible (challenge echo +
+   *  envelope encryption, see `OsciBibBridgeWireSpec`).
+   */
+  def drainSequence(
+      ids:      List[String],
+      max:      Int,
+      fetchOne: String => OsciMessage
+  ): (List[OsciMessage], Option[DrainFailure]) = {
+    val fetched                       = List.newBuilder[OsciMessage]
+    var failure: Option[DrainFailure] = None
+    val remaining                     = ids.take(max).iterator
+    while (failure.isEmpty && remaining.hasNext) {
+      val id = remaining.next()
+      try fetched += fetchOne(id)
+      catch case e: Exception => failure = Some(DrainFailure(id, toOsciError(e)))
+    }
+    (fetched.result(), failure)
+  }
+
   def parseTimestamp(ts: Timestamp): Option[Instant] =
     Option(ts).flatMap(t => parseInstant(t.getTimeStamp))
 
@@ -231,7 +258,7 @@ private[osci] object OsciBibSupport {
    *  detected malformed responses, so its code is not a reliable
    *  intermediary verdict.
    */
-  def toOsciError(e: Exception): Exception =
+  def toOsciError(e: Exception): OsciError =
     e match {
       case e: OsciError                => e
       case e: OSCIErrorException       => OsciError.OsciResponse(codeOf(e), detailOf(e))

@@ -193,6 +193,27 @@ class ConfigSourceSpec extends CatsEffectSuite {
     }
   }
 
+  test("file parses optional explicitDialog and defaults it to false when absent") {
+    val props =
+      """tenant.alice.cert.type      = pkcs12
+        |tenant.alice.cert.path      = /keys/alice.p12
+        |tenant.alice.cert.password  = pw
+        |tenant.alice.explicitDialog = true
+        |tenant.bob.cert.type        = pkcs12
+        |tenant.bob.cert.path        = /keys/bob.p12
+        |tenant.bob.cert.password    = pw
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.map { m =>
+      assertEquals(m(TenantId("alice")).explicitDialog, true)
+      assertEquals(m(TenantId("bob")).explicitDialog, false)
+    }
+  }
+
   test("file raises Config error on an unknown capturePayloads value") {
     val props =
       """tenant.alice.cert.type       = pkcs12

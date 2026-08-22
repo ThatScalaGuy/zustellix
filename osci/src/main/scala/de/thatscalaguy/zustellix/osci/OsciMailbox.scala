@@ -40,6 +40,25 @@ trait OsciMailbox[F[_]] {
    *  [[OsciMessage.warnings]].
    */
   def fetch(messageId: String): F[OsciMessage]
+
+  /** Lists and fetches up to `maxMessages` pending deliveries in ONE explicit
+   *  dialog: `InitDialog` + `FetchProcessCard` + one `FetchDelivery` per
+   *  message + `ExitDialog` — N+3 round trips where separate [[pending]] +
+   *  [[fetch]] calls cost 3 + 3N. Lists at most `min(fetchLimit, maxMessages)`
+   *  process cards; each fetch acknowledges like [[fetch]] does.
+   *
+   *  Raises like [[pending]] when the listing itself fails (an `InitDialog`
+   *  refusal, a `FetchProcessCard` error — `ExitDialog` is still sent when
+   *  the dialog was opened) and when `maxMessages` is not positive
+   *  ([[OsciError.Config]]). A failing fetch does NOT raise: the messages
+   *  fetched before it are already acknowledged, so it stops the drain and is
+   *  returned on [[MailboxDrain.failure]] beside them.
+   *
+   *  Note the at-least-once caveat: drain cannot persist ids between listing
+   *  and fetching, so the strict crash-safe pattern remains
+   *  [[pending]] → persist ids → [[fetch]] (see above).
+   */
+  def drain(maxMessages: Int): F[MailboxDrain]
 }
 
 object OsciMailbox {
@@ -75,9 +94,10 @@ object OsciMailbox {
    *
    *  The alias is resolved once at build time to fail fast on a missing cert
    *  or unopenable keystore, and again on every [[OsciMailbox.pending]] /
-   *  [[OsciMailbox.fetch]] — so a cert rotated in the manager (e.g. a
-   *  hot-reloading `DirectoryCertManager`) is picked up without rebuilding
-   *  the mailbox, and deliveries encrypted to the rotated cipher cert stay
+   *  [[OsciMailbox.fetch]] / [[OsciMailbox.drain]] — so a cert rotated in
+   *  the manager (e.g. a hot-reloading `DirectoryCertManager`) is picked up
+   *  without rebuilding the mailbox, and deliveries encrypted to the
+   *  rotated cipher cert stay
    *  decryptable. The built OSCI Originator is cached and only rebuilt when
    *  the credential actually changes.
    */

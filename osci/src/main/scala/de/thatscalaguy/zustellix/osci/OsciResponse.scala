@@ -6,8 +6,11 @@ package de.thatscalaguy.zustellix.osci
  *  @param xml       the recipient's response payload, decrypted and (per the
  *                   configured [[ContentSignaturePolicy]]) signature-checked —
  *                   `None` when the response carried no extractable content
- *  @param messageId the OSCI message id issued by the intermediary — the
- *                   handle for any later process-card inquiry
+ *  @param messageId the OSCI message id — the handle for any later
+ *                   process-card inquiry. Empty under the default wire
+ *                   profile, which skips the `GetMessageId` round trip; set
+ *                   [[OsciConfig.explicitDialog]] for an intermediary-issued
+ *                   id
  *  @param status    top OSCI feedback code (e.g. "0800")
  *  @param warnings  warning-class (`3xxx`) feedback entries — the request was
  *                   executed, but the intermediary flagged something (e.g.

@@ -13,8 +13,9 @@ trait OsciClient[F[_]] {
   /** Synchronous request/response (`MediateDelivery`): the recipient answers
    *  within the call, e.g. the XMeld Personensuche. The returned
    *  [[OsciResponse]] carries the response payload (`None` when the answer
-   *  had no extractable content) together with the intermediary's
-   *  `messageId`, `status` and `3xxx` warnings.
+   *  had no extractable content) together with the `messageId` (empty by
+   *  default — set [[OsciConfig.explicitDialog]] for an intermediary-issued
+   *  id), `status` and `3xxx` warnings.
    */
   def request(ags: Ags, xml: String): F[OsciResponse]
 
@@ -74,7 +75,10 @@ object OsciClient {
       )
     )
     Resource.eval(certSource)
-      .flatMap(internal.OsciBibBridge.resource[F](_, transport, config.contentSignatures))
+      .flatMap(
+        internal.OsciBibBridge
+          .resource[F](_, transport, config.contentSignatures, config.explicitDialog)
+      )
       .map { bridge =>
         new internal.OsciClientImpl[F](
           config.tenantId, config.subject, bridge, resolver, sink, config.capturePayloads
@@ -114,12 +118,13 @@ object OsciClient {
       transport: TransportI
   ): Resource[F, OsciClient[F]] = {
     val resolver = internal.AgsResolver[F](dvdv, config)
-    internal.OsciBibBridge.resource[F](certs, alias, transport, config.contentSignatures).map {
-      bridge =>
+    internal.OsciBibBridge
+      .resource[F](certs, alias, transport, config.contentSignatures, config.explicitDialog)
+      .map { bridge =>
         new internal.OsciClientImpl[F](
           TenantId(alias.value), config.subject, bridge, resolver, sink, config.capturePayloads
         )
-    }
+      }
   }
 
   private def defaultTransport(config: OsciConfig): TransportI =

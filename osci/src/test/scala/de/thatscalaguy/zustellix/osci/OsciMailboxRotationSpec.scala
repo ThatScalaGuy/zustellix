@@ -19,7 +19,8 @@ import scala.concurrent.duration.*
 
 /** Certificate rotation semantics of the CertManager-backed mailbox: the
  *  alias fails fast at acquisition and the Originator is resolved again on
- *  every `pending` / `fetch`.
+ *  every `pending` / `fetch` / `drain` (one drain = one resolution for the
+ *  whole batch).
  */
 class OsciMailboxRotationSpec extends CatsEffectSuite {
 
@@ -79,11 +80,29 @@ class OsciMailboxRotationSpec extends CatsEffectSuite {
                  )
       r1      <- bridge.pending.attempt
       r2      <- bridge.fetch("some-id").attempt
+      r3      <- bridge.drain(1).attempt
       n       <- counter.get
     } yield {
       assertEquals(r1, Left(boom))
       assertEquals(r2, Left(boom))
-      assertEquals(n, 2)
+      assertEquals(r3, Left(boom))
+      assertEquals(n, 3)
+    }
+  }
+
+  test("drain rejects a non-positive maxMessages without evaluating the resolver") {
+    for {
+      counter <- IO.ref(0)
+      bridge   = new internal.OsciMailboxBridgeImpl[IO](
+                   counter.update(_ + 1) *> IO.raiseError[Originator](new RuntimeException("resolve")),
+                   config,
+                   transport
+                 )
+      e       <- interceptIO[OsciError.Config](bridge.drain(0))
+      n       <- counter.get
+    } yield {
+      assert(e.reason.contains("maxMessages"))
+      assertEquals(n, 0)
     }
   }
 }
