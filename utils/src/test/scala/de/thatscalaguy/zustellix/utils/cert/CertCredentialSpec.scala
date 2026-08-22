@@ -20,11 +20,14 @@ class CertCredentialSpec extends CatsEffectSuite {
   private def resourcePath(name: String) =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)
 
-  test("toString reports the size and redacts the password") {
-    val s = CertCredential(Array.fill[Byte](7)(1), Secret).toString
+  test("toString reports the size and redacts the password and key bytes") {
+    val keyBytes = "KEYMATERIALBYTES".getBytes("UTF-8")
+    val s        = CertCredential(keyBytes, Secret).toString
     assert(!s.contains(Secret), s)
-    assert(s.contains("7 bytes"), s)
+    assert(s.contains("16 bytes"), s)
     assert(s.contains("<redacted>"), s)
+    assert(!s.contains("KEYMATERIALBYTES"), s)
+    assert(!s.contains("[B@"), s)
   }
 
   // --- fromSource: CertSource -> in-memory PKCS12 credential ---

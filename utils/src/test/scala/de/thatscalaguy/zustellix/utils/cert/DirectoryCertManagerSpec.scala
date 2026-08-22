@@ -196,6 +196,32 @@ class DirectoryCertManagerSpec extends CatsEffectSuite {
     }
   }
 
+  test("a .p12 with no passwords entry is skipped while the other aliases still resolve") {
+    for {
+      dir <- tempDir
+      _   <- IO.blocking {
+               writeP12(dir, "good", "pw-g")
+               writeP12(dir, "orphan", "pw-o")
+               writePasswords(dir.resolve("passwords.properties"), "good" -> "pw-g")
+             }
+      out <- DirectoryCertManager.resource[IO](cfg(dir)).use { mgr =>
+               for {
+                 good    <- mgr.resolve(CertAlias("good"))
+                 orphan  <- mgr.resolve(CertAlias("orphan")).attempt
+                 aliases <- mgr.knownAliases
+               } yield (good, orphan, aliases)
+             }
+    } yield {
+      val (good, orphan, aliases) = out
+      assertEquals(good.password, "pw-g")
+      orphan match {
+        case Left(CertManagerError.UnknownCert(a)) => assertEquals(a, CertAlias("orphan"))
+        case other => fail(s"orphan.p12 without a passwords entry must be skipped with UnknownCert, got $other")
+      }
+      assertEquals(aliases, Set(CertAlias("good")))
+    }
+  }
+
   test("an upper-case .P12 extension is picked up with its case-preserved stem as alias") {
     for {
       dir <- tempDir
