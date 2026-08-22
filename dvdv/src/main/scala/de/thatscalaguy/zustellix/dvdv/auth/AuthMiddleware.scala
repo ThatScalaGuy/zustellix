@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.Concurrent
@@ -25,9 +41,10 @@ object AuthMiddleware {
               val authed = req.putHeaders(Header.Raw(CIString("Authorization"), s"EmbeddedBearer $tok"))
               swapIn(hotswap, underlying.run(authed)).flatMap { resp =>
                 if (resp.status == Status.Unauthorized && canRetry)
-                  // release the 401's pool slot before the retry (which may
-                  // itself fetch a token through the same underlying client)
-                  hotswap.clear *> tokens.invalidate(tok) *> run(canRetry = false)
+                  // drain the 401's body (best-effort) so the connection can be
+                  // reused, then release its pool slot before the retry (which
+                  // may itself fetch a token through the same underlying client)
+                  resp.body.compile.drain.attempt *> hotswap.clear *> tokens.invalidate(tok) *> run(canRetry = false)
                 else
                   resp.pure[F]
               }

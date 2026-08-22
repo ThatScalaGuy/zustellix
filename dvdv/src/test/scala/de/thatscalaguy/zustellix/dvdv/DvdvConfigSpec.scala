@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv
 
 import munit.FunSuite
@@ -27,6 +43,14 @@ class DvdvConfigSpec extends FunSuite {
     val cfg = DvdvConfig(baseUri = uri"http://x")
     assertEquals(cfg.defaultTokenTtl, 5.minutes)
     assertEquals(cfg.copy(jwtLifetime = 1.second).defaultTokenTtl, 5.minutes)
+  }
+
+  test("retries default on with a 5-minute total deadline; RetryConfig.disabled turns them off") {
+    val cfg = DvdvConfig(baseUri = uri"http://x")
+    assertEquals(cfg.retryConfig, RetryConfig())
+    assertEquals(cfg.retryConfig.maxRetries, 3)
+    assertEquals(cfg.totalDeadline, Some(5.minutes))
+    assertEquals(RetryConfig.disabled.maxRetries, 0)
   }
 
   test("tokenUriFor is entry-path-independent") {

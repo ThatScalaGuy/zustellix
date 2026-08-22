@@ -1,10 +1,28 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci.internal
 
 import de.thatscalaguy.zustellix.osci.{
   ContentSignaturePolicy,
   ContentSignatureStatus,
+  DrainFailure,
   OsciError,
-  OsciFeedback
+  OsciFeedback,
+  OsciMessage
 }
 
 import de.osci.osci12.OSCIException
@@ -44,16 +62,23 @@ private[osci] object OsciBibSupport {
     }
 
   /** Warning-class (`3xxx`) feedback entries, deduplicated by code — the
-   *  intermediary usually repeats the same code once per requested language.
+   *  intermediary usually repeats the same code once per requested language
+   *  (rows are `[lang, code, text]`). Per code the `preferredLang` row wins;
+   *  when that language is absent for a code, its first row is kept. Output
+   *  order is first occurrence per code.
    */
-  def feedbackWarnings(fb: Array[Array[String]]): List[OsciFeedback] =
-    feedbackRows(fb)
-      .collect {
-        case row if row.length >= 2 && row(1) != null && row(1).startsWith("3") =>
-          val text = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
-          OsciFeedback(row(1), text)
-      }
-      .distinctBy(_.code)
+  def feedbackWarnings(
+      fb: Array[Array[String]],
+      preferredLang: String = "de"
+  ): List[OsciFeedback] = {
+    val warnings =
+      feedbackRows(fb).filter(row => row.length >= 2 && row(1) != null && row(1).startsWith("3"))
+    warnings.distinctBy(_(1)).map { first =>
+      val row  = warnings.find(r => r(1) == first(1) && r(0) == preferredLang).getOrElse(first)
+      val text = if row.length >= 3 then Option(row(2)).getOrElse("") else ""
+      OsciFeedback(row(1), text)
+    }
+  }
 
   /** The message id a FetchDelivery response is answering for. Null means the
    *  response carried no MessageId element — fall back to the requested id. A
@@ -207,6 +232,31 @@ private[osci] object OsciBibSupport {
     }
   }
 
+  /** The fetch loop of a mailbox drain: walks `ids` (at most `max`) in
+   *  listing order, fetching each via `fetchOne`. A fetch that throws stops
+   *  the loop — the messages fetched before it are kept (they are already
+   *  acknowledged at the intermediary) and the failure is mapped via
+   *  [[toOsciError]] into the returned [[DrainFailure]]; later ids are never
+   *  touched. Lives here as the unit-testable seam for the drain's
+   *  sequencing — a success-path wire fake is impossible (challenge echo +
+   *  envelope encryption, see `OsciBibBridgeWireSpec`).
+   */
+  def drainSequence(
+      ids:      List[String],
+      max:      Int,
+      fetchOne: String => OsciMessage
+  ): (List[OsciMessage], Option[DrainFailure]) = {
+    val fetched                       = List.newBuilder[OsciMessage]
+    var failure: Option[DrainFailure] = None
+    val remaining                     = ids.take(max).iterator
+    while (failure.isEmpty && remaining.hasNext) {
+      val id = remaining.next()
+      try fetched += fetchOne(id)
+      catch case e: Exception => failure = Some(DrainFailure(id, toOsciError(e)))
+    }
+    (fetched.result(), failure)
+  }
+
   def parseTimestamp(ts: Timestamp): Option[Instant] =
     Option(ts).flatMap(t => parseInstant(t.getTimeStamp))
 
@@ -231,7 +281,7 @@ private[osci] object OsciBibSupport {
    *  detected malformed responses, so its code is not a reliable
    *  intermediary verdict.
    */
-  def toOsciError(e: Exception): Exception =
+  def toOsciError(e: Exception): OsciError =
     e match {
       case e: OsciError                => e
       case e: OSCIErrorException       => OsciError.OsciResponse(codeOf(e), detailOf(e))

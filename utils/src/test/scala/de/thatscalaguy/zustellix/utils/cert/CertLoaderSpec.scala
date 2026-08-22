@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.utils.cert
 
 import cats.effect.IO
@@ -9,7 +25,7 @@ import java.nio.file.{Files, Paths}
 import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPrivateKey
 import java.security.spec.ECGenParameterSpec
-import java.security.{KeyPair, KeyPairGenerator, KeyStore}
+import java.security.{KeyPair, KeyPairGenerator, KeyStore, PrivateKey}
 import java.util.Date
 import javax.crypto.spec.SecretKeySpec
 import javax.security.auth.x500.X500Principal
@@ -18,9 +34,11 @@ class CertLoaderSpec extends CatsEffectSuite {
 
   java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
 
-  // Set by openssl during fixture generation.
-  // Verify with: openssl x509 -fingerprint -sha1 -noout -in test-cert.pem
-  // The exact value depends on the generated cert. We assert PKCS12 and PEM yield the *same* fingerprint.
+  // Pinned SHA-1 fingerprint of the committed test-cert.pem / test-cert.p12
+  // fixture. If the fixture is ever regenerated, recompute with:
+  //   openssl x509 -fingerprint -sha1 -noout -in test-cert.pem
+  // then lowercase and strip the colons (CertLoader.fingerprintHex's format).
+  private val FixtureCertSha1 = "6334903b017a707ca88e5f1044d371138926ec2d"
 
   private def resourcePath(name: String) =
     Paths.get(getClass.getClassLoader.getResource(name).toURI)
@@ -29,6 +47,7 @@ class CertLoaderSpec extends CatsEffectSuite {
     CertLoader.load[IO](CertSource.Pkcs12(resourcePath("test-cert.p12"), "test")).map { loaded =>
       assert(loaded.fingerprintSha1Hex.length == 40)
       assert(loaded.fingerprintSha1Hex.matches("^[0-9a-f]+$"))
+      assertEquals(loaded.fingerprintSha1Hex, FixtureCertSha1)
       assertEquals(loaded.privateKey.getAlgorithm, "RSA")
     }
   }
@@ -166,6 +185,27 @@ class CertLoaderSpec extends CatsEffectSuite {
     sw.toString
   }
 
+  private def pkcs1Pem(key: PrivateKey): String =
+    pemBlock(
+      "RSA PRIVATE KEY",
+      org.bouncycastle.asn1.pkcs.PrivateKeyInfo
+        .getInstance(key.getEncoded)
+        .parsePrivateKey()
+        .toASN1Primitive
+        .getEncoded
+    )
+
+  private def toDekInfoEncryptedPem(key: PrivateKey, password: String): String = {
+    val encryptor = new org.bouncycastle.openssl.jcajce.JcePEMEncryptorBuilder("AES-256-CBC")
+      .setProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
+      .build(password.toCharArray)
+    val sw     = new StringWriter()
+    val writer = new org.bouncycastle.openssl.jcajce.JcaPEMWriter(sw)
+    try writer.writeObject(key, encryptor)
+    finally writer.close()
+    sw.toString
+  }
+
   test("PKCS12 with a CA chain returns the full chain leaf-first") {
     for {
       material <- mintChain()
@@ -257,6 +297,63 @@ class CertLoaderSpec extends CatsEffectSuite {
                CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), certPem.getBytes("UTF-8"), None))
              )
     } yield assert(err.getMessage.contains("No private key found"), clues(err.getMessage))
+  }
+
+  // --- PEM private-key encodings: PKCS#1, DEK-Info encrypted, PKCS#8 ---
+
+  test("PKCS#1 'RSA PRIVATE KEY' PEM loads via the PEMKeyPair branch") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert))
+      keyPem   <- IO.blocking(pkcs1Pem(material.leafKey.getPrivate))
+      loaded   <- CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+    } yield {
+      assert(keyPem.startsWith("-----BEGIN RSA PRIVATE KEY-----"), keyPem)
+      assertEquals(
+        loaded.privateKey.asInstanceOf[RSAPrivateKey].getModulus,
+        material.leafKey.getPrivate.asInstanceOf[RSAPrivateKey].getModulus
+      )
+    }
+  }
+
+  test("DEK-Info encrypted PKCS#1 PEM decrypts with the key password") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert))
+      keyPem   <- IO.blocking(toDekInfoEncryptedPem(material.leafKey.getPrivate, "keypw"))
+      loaded   <- CertLoader.load[IO](
+                    CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), Some("keypw"))
+                  )
+    } yield {
+      assert(keyPem.contains("DEK-Info"), keyPem)
+      assertEquals(
+        loaded.privateKey.asInstanceOf[RSAPrivateKey].getModulus,
+        material.leafKey.getPrivate.asInstanceOf[RSAPrivateKey].getModulus
+      )
+    }
+  }
+
+  test("DEK-Info encrypted PEM without a keyPassword fails with the non-PKCS#8 encrypted-key message") {
+    for {
+      material <- mintChain()
+      certPem  <- IO.blocking(toPem(material.leafCert))
+      keyPem   <- IO.blocking(toDekInfoEncryptedPem(material.leafKey.getPrivate, "keypw"))
+      err <- interceptIO[IllegalArgumentException](
+               CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+             )
+    } yield {
+      assert(err.getMessage.contains("is encrypted; keyPassword required"), clues(err.getMessage))
+      assert(!err.getMessage.contains("PKCS#8"), clues(err.getMessage))
+    }
+  }
+
+  test("EC plain PKCS#8 'PRIVATE KEY' PEM loads a non-RSA key") {
+    for {
+      key     <- IO.blocking(ecKeyPair())
+      certPem <- IO.blocking(toPem(mintCert("ec-pkcs8", key, "ec-pkcs8", key, sigAlg = "SHA256withECDSA")))
+      keyPem  <- IO.blocking(pemBlock("PRIVATE KEY", key.getPrivate.getEncoded))
+      loaded  <- CertLoader.load[IO](CertSource.PemBytes(certPem.getBytes("UTF-8"), keyPem.getBytes("UTF-8"), None))
+    } yield assert(Set("EC", "ECDSA").contains(loaded.privateKey.getAlgorithm), clues(loaded.privateKey.getAlgorithm))
   }
 
   // --- Alias selection on multi-entry / non-private-key keystores ---

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv.internal
 
 import cats.effect.Concurrent
@@ -9,13 +25,15 @@ import io.circe.syntax.*
 import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
 import org.http4s.{Method, Request as HttpRequest}
 import org.http4s.client.Client
+import org.typelevel.log4cats.LoggerFactory
 
-final class HttpDvdvClient[F[_]: Concurrent](
+final class HttpDvdvClient[F[_]: Concurrent: LoggerFactory](
     http: Client[F],
     config: DvdvConfig
 ) extends DvdvClient[F] {
 
   private val base = config.directoryBase
+  private val log  = LoggerFactory[F].getLogger
   import UriBuilder.{endpoint, withRequestJson, jsonObject}
 
   // --- 3 plain GETs ---
@@ -36,7 +54,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
     val uri = withRequestJson(base, "findauthoritydescription",
       jsonObject("category" -> category.value, "organizationKey" -> organizationKey.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, OrganizationDescription]("findauthoritydescription", _))
+      .use(ResponseDecoder.optional[F, OrganizationDescription]("findauthoritydescription", _, log))
   }
 
   def findAuthorityDescriptions(organizationKey: OrganizationKey): F[List[OrganizationDescription]] = {
@@ -57,7 +75,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
     val uri = withRequestJson(base, "findCertificateByFingerprint",
       jsonObject("fingerPrint" -> fingerPrint.value))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Certificate]("findCertificateByFingerprint", _))
+      .use(ResponseDecoder.optional[F, Certificate]("findCertificateByFingerprint", _, log))
       .flatTap(_.traverse_(Revocation.check[F](_, config.ignoreRevocation)))
   }
 
@@ -98,7 +116,7 @@ final class HttpDvdvClient[F[_]: Concurrent](
         "serviceSpecificationUri" -> serviceSpecificationUri
       ))
     http.run(HttpRequest[F](Method.GET, uri))
-      .use(ResponseDecoder.optional[F, Service]("findservicedescription", _))
+      .use(ResponseDecoder.optional[F, Service]("findservicedescription", _, log))
   }
 
   def findServiceSpecificationUrisByCategory(category: Category): F[List[String]] = {
@@ -154,6 +172,6 @@ object HttpDvdvClient {
    */
   private val MaxBatchItems = 200
 
-  def apply[F[_]: Concurrent](http: Client[F], config: DvdvConfig): HttpDvdvClient[F] =
+  def apply[F[_]: Concurrent: LoggerFactory](http: Client[F], config: DvdvConfig): HttpDvdvClient[F] =
     new HttpDvdvClient[F](http, config)
 }

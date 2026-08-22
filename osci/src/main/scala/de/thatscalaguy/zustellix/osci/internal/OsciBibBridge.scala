@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.{Ref, Resource, Sync}
@@ -8,7 +24,7 @@ import de.thatscalaguy.zustellix.osci.{ContentSignaturePolicy, OsciError, OsciRe
 import de.osci.osci12.common.DialogHandler
 import de.osci.osci12.extinterfaces.TransportI
 import de.osci.osci12.extinterfaces.crypto.{Decrypter, Signer}
-import de.osci.osci12.messagetypes.{GetMessageId, MediateDelivery, StoreDelivery}
+import de.osci.osci12.messagetypes.{GetMessageId, MediateDelivery, ResponseToStoreDelivery, StoreDelivery}
 import de.osci.osci12.roles.{Addressee, Intermed, Originator}
 import de.osci.osci12.samples.impl.crypto.{PKCS12Decrypter, PKCS12Signer}
 
@@ -17,13 +33,18 @@ import java.security.{GeneralSecurityException, Security}
 
 private[osci] object OsciBibBridge {
 
+  /** Both `resource` overloads deliberately attach no finalizer:
+   *  osci-bibliothek holds no long-lived connections — every operation opens
+   *  its own dialog over `transport` — so there is nothing to release.
+   */
   def resource[F[_]: Sync](
       certSource: CertSource,
       transport:  TransportI,
-      contentSignatures: ContentSignaturePolicy
+      contentSignatures: ContentSignaturePolicy,
+      explicitDialog: Boolean = false
   ): Resource[F, OsciTransport[F]] =
     Resource.eval(originator[F](certSource))
-      .map(o => new OsciBibBridgeImpl[F](o.pure[F], transport, contentSignatures))
+      .map(o => new OsciBibBridgeImpl[F](o.pure[F], transport, contentSignatures, explicitDialog))
 
   /** Alias-keyed path: the same PKCS12 the DVDV client uses, supplied by the
    *  shared [[de.thatscalaguy.zustellix.utils.cert.CertManager]] as bytes
@@ -36,10 +57,14 @@ private[osci] object OsciBibBridge {
       certs:     CertManager[F],
       alias:     CertAlias,
       transport: TransportI,
-      contentSignatures: ContentSignaturePolicy
+      contentSignatures: ContentSignaturePolicy,
+      // No default here — Scala allows default arguments on only one
+      // overloaded variant (the CertSource one carries it).
+      explicitDialog: Boolean
   ): Resource[F, OsciTransport[F]] =
     Resource.eval(managedOriginator[F](certs, alias)).flatMap { resolve =>
-      Resource.eval(resolve).as(new OsciBibBridgeImpl[F](resolve, transport, contentSignatures))
+      Resource.eval(resolve)
+        .as(new OsciBibBridgeImpl[F](resolve, transport, contentSignatures, explicitDialog))
     }
 
   /** An effect that resolves the alias in the [[de.thatscalaguy.zustellix.utils.cert.CertManager]]
@@ -124,11 +149,17 @@ private[osci] object OsciBibBridge {
 /** `resolveOriginator` is evaluated at the start of every operation, so a
  *  rotated credential signs/decrypts the next message; pass a pure value for
  *  a cert that is fixed for the lifetime of the bridge.
+ *
+ *  `explicitDialog` selects the wire profile (see [[de.thatscalaguy.zustellix.osci.OsciConfig]]):
+ *  the default cheap paths skip the round trips the protocol does not
+ *  require, `true` restores the previous `GetMessageId` + `InitDialog` +
+ *  delivery + `ExitDialog` flow for both operations.
  */
 private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
     resolveOriginator: F[Originator],
     transport: TransportI,
-    contentSignatures: ContentSignaturePolicy
+    contentSignatures: ContentSignaturePolicy,
+    explicitDialog: Boolean = false
 ) extends OsciTransport[F] {
 
   import OsciBibSupport.*
@@ -141,12 +172,27 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
           val intermed  = new Intermed(null, route.intermedCipher, route.intermedUri)
           val dialog    = new DialogHandler(originator, intermed, transport)
 
-          val msgIdResp = new GetMessageId(dialog).send()
-          checkFeedback(msgIdResp.getFeedback)
+          // osci-bibliothek 2.5.1 cannot send a MediateDelivery in an
+          // implicit dialog: its compose() hard-requires ControlBlock
+          // Response/ConversationID/SequenceNumber (only InitDialog
+          // establishes them), and its constructor lacks the
+          // !isExplicitDialog -> resetControlBlock() handling that
+          // StoreDelivery/GetMessageId have. The MessageId element IS
+          // optional there, so the cheap path keeps the dialog frame and
+          // drops only the GetMessageId round trip.
+          val msgId: Option[String] =
+            if explicitDialog then {
+              val r = new GetMessageId(dialog).send()
+              checkFeedback(r.getFeedback)
+              Some(r.getMessageId)
+            }
+            else None
 
-          val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
+          val rsp = withExplicitDialog(dialog, msgId) {
             val mediate = new MediateDelivery(dialog, addressee, route.addresseeUri.toString)
-            mediate.setMessageId(msgIdResp.getMessageId)
+            msgId.foreach(mediate.setMessageId)
+            // Without a message id the library omits the Subject and the
+            // QoTS headers from the wire too (no process card is written).
             mediate.setSubject(subject)
             mediate.setQualityOfTimeStampCreation(false)
             mediate.setQualityOfTimeStampReception(false)
@@ -154,7 +200,7 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
             mediate.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
 
             val r = mediate.send()
-            checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
+            checkFeedback(r.getFeedback, msgId)
             r
           }
 
@@ -167,12 +213,12 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
             rsp.getEncryptedData,
             originator,
             contentSignatures,
-            Option(msgIdResp.getMessageId)
+            msgId
           )
 
           OsciRawResult(
             responseXml = verified.map(_._1),
-            messageId   = msgIdResp.getMessageId,
+            messageId   = msgId.orElse(Option(rsp.getMessageIdRequest)).getOrElse(""),
             status      = topFeedbackCode(rsp.getFeedback),
             warnings    = feedbackWarnings(rsp.getFeedback),
             signature   = verified.map(_._2)
@@ -194,22 +240,26 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
 
           val msgIdResp = new GetMessageId(dialog).send()
           checkFeedback(msgIdResp.getFeedback)
+          val msgId = msgIdResp.getMessageId
 
-          val rsp = withExplicitDialog(dialog, Option(msgIdResp.getMessageId)) {
-            val storeDelivery = new StoreDelivery(dialog, addressee, msgIdResp.getMessageId)
-            storeDelivery.setSubject(subject)
-            storeDelivery.setQualityOfTimeStampCreation(false)
-            storeDelivery.setQualityOfTimeStampReception(false)
-
-            storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
-
-            val r = storeDelivery.send()
-            checkFeedback(r.getFeedback, Option(msgIdResp.getMessageId))
-            r
-          }
+          val rsp =
+            if explicitDialog then
+              withExplicitDialog(dialog, Some(msgId)) {
+                sendStore(new StoreDelivery(dialog, addressee, msgId), subject, xml, originator, addressee, msgId)
+              }
+            else {
+              // Implicit-dialog StoreDelivery (its constructor resets the
+              // control block for non-explicit dialogs). A FRESH
+              // DialogHandler keeps prevChallenge null, so the request
+              // carries no stale Response from the closed GetMessageId
+              // exchange. No InitDialog was sent, so there is no dialog to
+              // exit.
+              val storeDialog = new DialogHandler(originator, intermed, transport)
+              sendStore(new StoreDelivery(storeDialog, addressee, msgId), subject, xml, originator, addressee, msgId)
+            }
 
           OsciReceipt(
-            messageId = msgIdResp.getMessageId,
+            messageId = msgId,
             status    = topFeedbackCode(rsp.getFeedback),
             creation  = parseTimestamp(rsp.getTimestampCreation),
             warnings  = feedbackWarnings(rsp.getFeedback)
@@ -220,4 +270,23 @@ private[osci] final class OsciBibBridgeImpl[F[_]: Sync](
         }
       }
     }
+
+  private def sendStore(
+      storeDelivery: StoreDelivery,
+      subject:       String,
+      xml:           String,
+      originator:    Originator,
+      addressee:     Addressee,
+      msgId:         String
+  ): ResponseToStoreDelivery = {
+    storeDelivery.setSubject(subject)
+    storeDelivery.setQualityOfTimeStampCreation(false)
+    storeDelivery.setQualityOfTimeStampReception(false)
+
+    storeDelivery.addEncryptedData(signedEncryptedPayload(xml, originator, addressee))
+
+    val r = storeDelivery.send()
+    checkFeedback(r.getFeedback, Some(msgId))
+    r
+  }
 }

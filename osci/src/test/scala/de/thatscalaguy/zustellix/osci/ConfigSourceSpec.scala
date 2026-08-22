@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci
 
 import cats.effect.IO
@@ -190,6 +206,27 @@ class ConfigSourceSpec extends CatsEffectSuite {
     ConfigSource.file[IO](tmp).load.map { m =>
       assertEquals(m(TenantId("alice")).capturePayloads, true)
       assertEquals(m(TenantId("bob")).capturePayloads, false)
+    }
+  }
+
+  test("file parses optional explicitDialog and defaults it to false when absent") {
+    val props =
+      """tenant.alice.cert.type      = pkcs12
+        |tenant.alice.cert.path      = /keys/alice.p12
+        |tenant.alice.cert.password  = pw
+        |tenant.alice.explicitDialog = true
+        |tenant.bob.cert.type        = pkcs12
+        |tenant.bob.cert.path        = /keys/bob.p12
+        |tenant.bob.cert.password    = pw
+        |""".stripMargin
+
+    val tmp = Files.createTempFile("osci-cfg-", ".properties")
+    Files.writeString(tmp, props)
+    tmp.toFile.deleteOnExit()
+
+    ConfigSource.file[IO](tmp).load.map { m =>
+      assertEquals(m(TenantId("alice")).explicitDialog, true)
+      assertEquals(m(TenantId("bob")).explicitDialog, false)
     }
   }
 

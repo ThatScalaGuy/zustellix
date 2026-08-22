@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.IO
@@ -25,13 +41,14 @@ import scala.collection.mutable.ListBuffer
  *  one request — a refused `GetMessageId` / `InitDialog` is followed by
  *  neither the delivery message nor an `ExitDialog`.
  *
- *  Success-path wire sequences are deliberately not faked here: the library's
- *  `DialogHandler.checkControlBlock` requires the response to echo the
- *  request's per-message random challenge, and the request is
- *  envelope-encrypted — a fake intermediary would have to decrypt it. Those
- *  paths run against a live test intermediary in the gated
- *  [[OsciBibBridgeIT]]; the feedback-row sequencing is unit-covered via the
- *  thunk seam in [[OsciBibSupportSpec]].
+ *  Success-path wire sequences (and thereby round-trip counts — 3-trip
+ *  mediate, 2-trip implicit store, N+3-trip drain) are deliberately not
+ *  faked here: the library's `DialogHandler.checkControlBlock` requires the
+ *  response to echo the request's per-message random challenge, and the
+ *  request is envelope-encrypted — a fake intermediary would have to decrypt
+ *  it. Those paths run against a live test intermediary in the gated
+ *  [[OsciBibBridgeIT]]; the feedback-row and drain sequencing is
+ *  unit-covered via the thunk seams in [[OsciBibSupportSpec]].
  */
 class OsciBibBridgeWireSpec extends CatsEffectSuite {
 
@@ -141,7 +158,7 @@ class OsciBibBridgeWireSpec extends CatsEffectSuite {
   // 9811 = InternalErrorSupplier, 9802 = NoExplicitDialog — both known to
   // OSCIErrorCodes.fromErrorCode, so the parsed fault keeps its code.
 
-  test("mediate: a SOAP fault on GetMessageId raises OsciResponse after exactly one request") {
+  test("mediate (default): a SOAP fault on InitDialog raises OsciResponse after exactly one request") {
     val recorded  = ListBuffer.empty[(URI, Array[Byte])]
     val transport = new FakeTransport(recorded, fault("9811", "Interner Fehler des Intermediaers"))
     val bridge    = new OsciBibBridgeImpl[IO](IO(originator), transport, ContentSignaturePolicy.Warn)
@@ -149,7 +166,24 @@ class OsciBibBridgeWireSpec extends CatsEffectSuite {
       assertEquals(e.code, "9811")
       assertEquals(e.detail, "Interner Fehler des Intermediaers")
       assertEquals(e.messageId, None)
-      // GetMessageId was refused, so neither MediateDelivery nor ExitDialog followed.
+      // The default profile sends no GetMessageId — the first (and only)
+      // request is InitDialog; refused, so neither MediateDelivery nor
+      // ExitDialog followed.
+      assertSingleRequest(recorded, route.intermedUri)
+    }
+  }
+
+  test("mediate (explicitDialog): a SOAP fault on GetMessageId raises OsciResponse after exactly one request") {
+    val recorded  = ListBuffer.empty[(URI, Array[Byte])]
+    val transport = new FakeTransport(recorded, fault("9811", "Interner Fehler des Intermediaers"))
+    val bridge    = new OsciBibBridgeImpl[IO](
+      IO(originator), transport, ContentSignaturePolicy.Warn, explicitDialog = true
+    )
+    interceptIO[OsciError.OsciResponse](bridge.mediate(route, "subject", "<xml/>")).map { e =>
+      assertEquals(e.code, "9811")
+      assertEquals(e.messageId, None)
+      // GetMessageId (first again in this mode) was refused, so neither
+      // InitDialog, MediateDelivery nor ExitDialog followed.
       assertSingleRequest(recorded, route.intermedUri)
     }
   }
@@ -161,7 +195,8 @@ class OsciBibBridgeWireSpec extends CatsEffectSuite {
     interceptIO[OsciError.OsciResponse](bridge.store(route, "subject", "<xml/>")).map { e =>
       assertEquals(e.code, "9811")
       assertEquals(e.messageId, None)
-      // GetMessageId was refused, so neither StoreDelivery nor ExitDialog followed.
+      // Both wire profiles open with GetMessageId; refused, so no
+      // StoreDelivery followed — implicit or not — and no ExitDialog either.
       assertSingleRequest(recorded, route.intermedUri)
     }
   }
@@ -186,6 +221,18 @@ class OsciBibBridgeWireSpec extends CatsEffectSuite {
     interceptIO[OsciError.OsciResponse](mailbox.fetch("some-id")).map { e =>
       assertEquals(e.code, "9802")
       // FetchDelivery was never sent.
+      assertSingleRequest(recorded, mailboxConfig.intermedUri)
+    }
+  }
+
+  test("drain: an InitDialog refusal raises OsciResponse and no ExitDialog is sent") {
+    val recorded  = ListBuffer.empty[(URI, Array[Byte])]
+    val transport = new FakeTransport(recorded, fault("9802", "Kein expliziter Dialog"))
+    val mailbox   = new OsciMailboxBridgeImpl[IO](IO(originator), mailboxConfig, transport)
+    interceptIO[OsciError.OsciResponse](mailbox.drain(10)).map { e =>
+      assertEquals(e.code, "9802")
+      // The one dialog of the whole batch was refused before
+      // FetchProcessCard — nothing else followed, no ExitDialog either.
       assertSingleRequest(recorded, mailboxConfig.intermedUri)
     }
   }

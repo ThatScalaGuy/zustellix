@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.Sync
@@ -23,6 +39,7 @@ import scala.jdk.CollectionConverters.*
  *   tenant.<id>.readTimeoutMs          = <millis>            (optional)
  *   tenant.<id>.contentSignatures      = require | warn      (optional, default warn)
  *   tenant.<id>.capturePayloads        = true | false        (optional, default false)
+ *   tenant.<id>.explicitDialog         = true | false        (optional, default false)
  * }}}
  *
  *  The intermediary is no longer configured here — it is resolved per send
@@ -90,14 +107,14 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
         }
       }
 
-    val capturePayloads =
-      kv.get("capturePayloads").fold(false) { v =>
+    def bool(k: String): Boolean =
+      kv.get(k).fold(false) { v =>
         v.trim.toLowerCase match {
           case "true"  => true
           case "false" => false
           case other =>
             throw OsciError.Config(
-              s"tenant.$id.capturePayloads must be 'true' or 'false', got '$other'"
+              s"tenant.$id.$k must be 'true' or 'false', got '$other'"
             )
         }
       }
@@ -110,7 +127,8 @@ private[osci] final class FileConfigSource[F[_]: Sync](path: Path) extends Confi
       connectTimeout = timeoutMs("connectTimeoutMs", OsciHttpTransport.DefaultConnectTimeout),
       readTimeout    = timeoutMs("readTimeoutMs", OsciHttpTransport.DefaultReadTimeout),
       contentSignatures = contentSignatures,
-      capturePayloads   = capturePayloads
+      capturePayloads   = bool("capturePayloads"),
+      explicitDialog    = bool("explicitDialog")
     )
   }
 }

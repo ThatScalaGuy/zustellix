@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci
 
 import de.thatscalaguy.zustellix.utils.cert.CertSource
@@ -24,6 +40,17 @@ import scala.concurrent.duration.FiniteDuration
  *  contain personal data, and every `LaufzettelSink` (DB, queue, log
  *  shipper) would persist it. Enable only when the sink is meant to hold
  *  the payload and handles it accordingly.
+ *
+ *  `explicitDialog` selects the wire profile per operation. Default
+ *  (`false`): `request` is `InitDialog` + `MediateDelivery` + `ExitDialog`
+ *  (3 round trips) — no `GetMessageId`, so [[OsciResponse.messageId]] /
+ *  [[Laufzettel.messageId]] are empty unless the intermediary volunteers an
+ *  id on the response process card, and the intermediary writes no request
+ *  process card (the `subject` is not carried on the wire either — OSCI ties
+ *  both to the message id); `send` is `GetMessageId` + `StoreDelivery`, both
+ *  in implicit dialogs (2 round trips). `true` restores the previous
+ *  `GetMessageId` + `InitDialog` + delivery + `ExitDialog` flow (4 round
+ *  trips) with an intermediary-issued message id also for `request`.
  */
 final case class OsciConfig(
     tenantId: TenantId,
@@ -37,7 +64,8 @@ final case class OsciConfig(
     connectTimeout: FiniteDuration = OsciHttpTransport.DefaultConnectTimeout,
     readTimeout: FiniteDuration = OsciHttpTransport.DefaultReadTimeout,
     contentSignatures: ContentSignaturePolicy = ContentSignaturePolicy.Warn,
-    capturePayloads: Boolean = false
+    capturePayloads: Boolean = false,
+    explicitDialog: Boolean = false
 )
 
 object OsciConfig {

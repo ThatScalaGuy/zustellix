@@ -16,21 +16,19 @@ val JwtScalaV = "11.0.4"
 val Log4catsV = "2.8.0"
 val BouncyV = "1.84"
 val MunitCEV = "2.2.0"
-val ProxyVoleV = "1.1.9"
 val OsciBibV = "2.5.1"
 
-ThisBuild / scalacOptions ++= Seq(
-  "-deprecation",
-  "-feature",
-  "-Wunused:all",
-  "-Xfatal-warnings",
-  "-java-output-version:11"
-)
+ThisBuild / tlJdkRelease := Some(11)
+ThisBuild / tlCiReleaseBranches := Seq()
+// the tree is not formatted per .scalafmt.conf; CI checks headers only
+ThisBuild / tlCiScalafmtCheck := false
 
 ThisBuild / githubWorkflowJavaVersions := Seq(
   JavaSpec.temurin("21"),
   JavaSpec.temurin("11")
 )
+// clean.yml runs on every push and races the targets.tar handoff on tag builds
+ThisBuild / githubWorkflowIncludeClean := false
 
 lazy val root = (project in file("."))
   .enablePlugins(NoPublishPlugin)
@@ -73,6 +71,7 @@ lazy val dvdv = (project in file("dvdv"))
       "com.github.jwt-scala" %% "jwt-circe" % JwtScalaV,
       "org.typelevel" %% "log4cats-core" % Log4catsV,
       "org.typelevel" %% "munit-cats-effect" % MunitCEV % Test,
+      "org.typelevel" %% "cats-effect-testkit" % CatsEffectV % Test,
       "org.http4s" %% "http4s-ember-server" % Http4sV % Test,
       "org.typelevel" %% "log4cats-noop" % Log4catsV % Test,
       "org.typelevel" %% "log4cats-testing" % Log4catsV % Test

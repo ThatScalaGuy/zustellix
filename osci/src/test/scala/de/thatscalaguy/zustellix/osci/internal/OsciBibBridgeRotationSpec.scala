@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.IO
@@ -111,7 +127,9 @@ class OsciBibBridgeRotationSpec extends CatsEffectSuite {
     for {
       certs <- InMemoryCertManager.make[IO](Map.empty[CertAlias, CertCredential])
       e     <- interceptIO[CertManagerError.UnknownCert](
-                 OsciBibBridge.resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn).use_
+                 OsciBibBridge
+                   .resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn, explicitDialog = false)
+                   .use_
                )
     } yield assertEquals(e.alias, alias)
   }
@@ -120,7 +138,9 @@ class OsciBibBridgeRotationSpec extends CatsEffectSuite {
     for {
       certs <- InMemoryCertManager.make[IO](Map(alias -> CertCredential(Array[Byte](1, 2, 3), "pw")))
       _     <- interceptIO[OsciError.Certificate](
-                 OsciBibBridge.resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn).use_
+                 OsciBibBridge
+                   .resource[IO](certs, alias, transport, ContentSignaturePolicy.Warn, explicitDialog = false)
+                   .use_
                )
     } yield ()
   }

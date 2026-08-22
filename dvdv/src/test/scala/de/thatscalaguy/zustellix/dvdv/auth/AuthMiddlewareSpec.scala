@@ -1,7 +1,24 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv.auth
 
 import cats.effect.{IO, Ref}
 import cats.effect.kernel.Resource
+import fs2.Stream
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.client.Client
@@ -74,6 +91,35 @@ class AuthMiddlewareSpec extends CatsEffectSuite {
       assertEquals(ic, 1)                    // invalidated exactly once
       assertEquals(ss, List("tok-0"))        // ...passing exactly the token it sent
       assertEquals(as, List("EmbeddedBearer tok-0", "EmbeddedBearer tok-1"))
+    }
+  }
+
+  test("401 then 200: the 401 body is fully consumed before the retry") {
+    val hits   = Ref.unsafe[IO, Int](0)
+    val events = Ref.unsafe[IO, List[String]](Nil)
+    val backend = Client.fromHttpApp(HttpRoutes.of[IO] { case _ =>
+      for {
+        n <- hits.updateAndGet(_ + 1)
+        _ <- events.update(_ :+ s"req-$n")
+        r <- if (n == 1)
+               IO(Response[IO](Status.Unauthorized).withBodyStream(
+                 Stream.emits("denied".getBytes.toSeq).covary[IO] ++ Stream.exec(events.update(_ :+ "drained"))
+               ))
+             else Ok()
+      } yield r
+    }.orNotFound)
+
+    for {
+      inv   <- Ref.of[IO, Int](0)
+      stale <- Ref.of[IO, List[String]](Nil)
+      tm     = new StubTokenManager(inv, stale, i => s"tok-$i")
+      c      = AuthMiddleware(tm)(backend)
+      st    <- c.status(Request[IO](Method.GET, uri"http://dvdv.test/x"))
+      evs   <- events.get
+    } yield {
+      assertEquals(st, Status.Ok)
+      // the 401's body was fully consumed, and before the retry was sent
+      assertEquals(evs, List("req-1", "drained", "req-2"))
     }
   }
 

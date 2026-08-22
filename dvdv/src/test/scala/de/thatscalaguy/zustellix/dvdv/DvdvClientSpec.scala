@@ -1,6 +1,23 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{IO, Ref}
+import cats.effect.testkit.TestControl
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{
   CertAlias,
@@ -11,6 +28,7 @@ import de.thatscalaguy.zustellix.utils.cert.{
   InMemoryCertManager
 }
 import io.circe.Json
+import io.circe.parser.parse
 import munit.CatsEffectSuite
 import org.http4s.*
 import org.http4s.circe.CirceEntityCodec.circeEntityEncoder
@@ -140,6 +158,80 @@ class DvdvClientSpec extends CatsEffectSuite {
     }
   }
 
+  test("assembled stack: 401 refresh, failover stickiness and the cache cooperate on one call path") {
+    val tokenPath = "/extern/standaloneauth/token"
+    val dirPath   = "/extern/standaloneauth/directory/v2/findServiceSpecificationUrisByCategory"
+    for {
+      bytes      <- IO.blocking(java.nio.file.Files.readAllBytes(resourcePath("test-cert.p12")))
+      fixture    <- IO.blocking(java.nio.file.Files.readString(resourcePath("findUrisByCategory_Aufnahmeeinrichtung.json")))
+      uris       <- IO.fromEither(parse(fixture))
+      hits       <- Ref.of[IO, List[(String, String)]](Nil)
+      tokenPosts <- Ref.of[IO, Int](0)
+      backend = HttpApp[IO] { req =>
+                  val host = req.uri.authority.map(_.host.value).getOrElse("?")
+                  val path = req.uri.path.renderString
+                  hits.update(_ :+ (host -> path)) *> {
+                    (req.method, path) match {
+                      case (Method.POST, `tokenPath`) =>
+                        tokenPosts.updateAndGet(_ + 1).flatMap { n =>
+                          Ok(Json.obj(
+                            "access_token" -> Json.fromString(s"tok-$n"),
+                            "expires_in"   -> Json.fromLong(300L),
+                            "token_type"   -> Json.fromString("Bearer")
+                          ))
+                        }
+                      case (Method.GET, `dirPath`) if host == "primary" =>
+                        IO(Response[IO](Status.ServiceUnavailable))
+                      case (Method.GET, `dirPath`) =>
+                        val auth = req.headers.get(CIString("Authorization")).map(_.head.value)
+                        if (auth.forall(_ == "EmbeddedBearer tok-1")) IO(Response[IO](Status.Unauthorized))
+                        else Ok(uris)
+                      case _ => NotFound()
+                    }
+                  }
+                }
+      cfg = DvdvConfig(
+              baseUri         = uri"http://primary",
+              certSource      = Some(CertSource.Pkcs12Bytes(bytes, "test")),
+              failoverServers = List(uri"http://backup")
+            )
+      r <- DvdvClient.fromClient[IO](cfg, Client.fromHttpApp(backend)).use { dvdv =>
+             for {
+               first  <- dvdv.findServiceSpecificationUrisByCategory(model.Category.unsafe("Aufnahmeeinrichtung"))
+               h1     <- hits.get
+               second <- dvdv.findServiceSpecificationUrisByCategory(model.Category.unsafe("Aufnahmeeinrichtung"))
+               h2     <- hits.get
+             } yield (first, h1, second, h2)
+           }
+      posts <- tokenPosts.get
+    } yield {
+      val (first, h1, second, h2) = r
+      val expected = List(
+        "http://www.osci.de/xauslaender1170/xauslaender1170ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xauslaender1180/xauslaender1180ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xinneres/quittung/2/xinneresquittungv2.wsdl",
+        "http://www.osci.de/xinneres/quittung/3/xinneresquittungv3.wsdl"
+      )
+      assertEquals(first, expected)
+      assertEquals(second, expected)
+      assertEquals(posts, 2) // one initial mint, exactly one 401-driven refresh
+      assertEquals(
+        h1,
+        List(
+          // token POST rides the failover middleware at the then-active primary
+          "primary" -> tokenPath,
+          // directory GET fails over primary -> backup; the backup rejects tok-1
+          "primary" -> dirPath,
+          "backup"  -> dirPath,
+          // the 401 retry mints its token at, and stays sticky on, the backup
+          "backup"  -> tokenPath,
+          "backup"  -> dirPath
+        )
+      )
+      assertEquals(h2, h1) // second call served from the cache: no backend traffic
+    }
+  }
+
   test("fromClient with a CertManager fails fast on an unknown alias") {
     for {
       certs <- InMemoryCertManager.make[IO](Map.empty[CertAlias, CertCredential])
@@ -194,7 +286,8 @@ class DvdvClientSpec extends CatsEffectSuite {
     baseUri        = uri"http://dvdv.test",
     entryPath      = DvdvEntryPath.InternDirectory, // no cert, no token POST
     requestTimeout = 200.millis,
-    cacheConfig    = CacheConfig.disabled
+    cacheConfig    = CacheConfig.disabled,
+    retryConfig    = RetryConfig.disabled // a per-attempt timeout is a retriable transport error
   )
 
   test("fromClient applies config.requestTimeout to the provided client") {
@@ -212,5 +305,59 @@ class DvdvClientSpec extends CatsEffectSuite {
                  DvdvClient.fromClient[IO](shortTimeoutCfg, hangingHttp, certs, alias).use(_.serviceVersion)
                )
     } yield ()
+  }
+
+  private def retryTestCfg(retryConfig: RetryConfig) = DvdvConfig(
+    baseUri     = uri"http://dvdv.test",
+    entryPath   = DvdvEntryPath.InternDirectory, // no cert, no token POST
+    cacheConfig = CacheConfig.disabled,
+    retryConfig = retryConfig
+  )
+
+  test("fromClient retries a transient 503 GET and succeeds on the next pass") {
+    for {
+      hits <- Ref.of[IO, Int](0)
+      backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+                  hits.getAndUpdate(_ + 1).flatMap { n =>
+                    if (n == 0) IO(Response[IO](Status.ServiceUnavailable))
+                    else Ok(Json.fromString("v1"))
+                  }
+                })
+      cfg = retryTestCfg(RetryConfig(baseDelay = 1.milli))
+      v   <- DvdvClient.fromClient[IO](cfg, backend).use(_.serviceVersion)
+      n   <- hits.get
+    } yield {
+      assertEquals(v.raw, Some("v1"))
+      assertEquals(n, 2)
+    }
+  }
+
+  test("batch POSTs are not retried: a 503 surfaces after a single backend hit") {
+    for {
+      hits <- Ref.of[IO, Int](0)
+      backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+                  hits.update(_ + 1).as(Response[IO](Status.ServiceUnavailable))
+                })
+      cfg = retryTestCfg(RetryConfig(baseDelay = 1.milli))
+      res <- DvdvClient.fromClient[IO](cfg, backend).use(_.batchFindCategories(List(model.Request()))).attempt
+      n   <- hits.get
+    } yield {
+      assert(res.left.exists(_.isInstanceOf[DvdvError.ServerError]), s"expected ServerError, got $res")
+      assertEquals(n, 1)
+    }
+  }
+
+  test("totalDeadline cuts off a long retry chain") {
+    TestControl.executeEmbed {
+      val backend = Client.fromHttpApp(HttpApp[IO] { _ =>
+        IO(Response[IO](Status.ServiceUnavailable).putHeaders(Header.Raw(CIString("Retry-After"), "60")))
+      })
+      val cfg = retryTestCfg(RetryConfig(maxRetries = 100, baseDelay = 1.milli))
+        .copy(totalDeadline = Some(90.seconds)) // strictly between the 60s Retry-After sleeps
+      DvdvClient.fromClient[IO](cfg, backend).use(_.serviceVersion).attempt.map {
+        case Left(e: TimeoutException) => assert(e.getMessage.contains("total deadline"), e.getMessage)
+        case other                     => fail(s"expected a total-deadline TimeoutException, got $other")
+      }
+    }
   }
 }

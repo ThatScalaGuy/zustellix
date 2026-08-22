@@ -1,5 +1,7 @@
 # zustellix
 
+[![Maven Central](https://img.shields.io/maven-central/v/de.thatscalaguy/zustellix-utils_3)](https://central.sonatype.com/artifact/de.thatscalaguy/zustellix-utils_3)
+
 A typed, **tagless-final Scala 3** toolkit for the German public-administration
 messaging stack:
 
@@ -55,11 +57,11 @@ osci ──▶ dvdv ──▶ utils
 
 ```scala
 // build.sbt — pick the module you need (transitive deps are pulled in)
-libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.3.0"
 // or just the directory client:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.3.0"
 // or only the cert utilities:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.2.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.3.0"
 ```
 
 > **Migrating from 0.1.x:** `zustellix-osci-xmeld` is frozen at 0.1.1 and
@@ -281,6 +283,14 @@ atomically — write to a temp file in the same directory, then
 otherwise be served from the retained previous credential until the write
 completes.
 
+`DirectoryCertManager` picks up `*.p12` files only — PEM files placed in the
+directory are ignored, since PKCS12 is the on-disk format both DVDV and OSCI
+consume. PEM material can still back a tenant: repack it in memory with
+`CertCredential.fromPem(cert, key, keyPassword, storePassword)` (or
+`CertCredential.fromSource` for any `CertSource`) and hand the resulting
+credential to `InMemoryCertManager`, or export it to a `.p12`
+(`openssl pkcs12 -export`) for the directory.
+
 `zustellix-utils`, `zustellix-dvdv` and `zustellix-osci` depend only on
 `log4cats-core`, so to use `Slf4jFactory` as shown above, add
 `org.typelevel::log4cats-slf4j` plus an SLF4J backend (e.g.
@@ -351,7 +361,9 @@ DvdvClient.fromClient[IO](config, myClient, certManager, CertAlias("kiel"))
 ```
 
 All constructors require a `given LoggerFactory[F]` in scope (the auth layer
-warns on degenerate token TTL/skew combinations) — see the
+warns on degenerate token TTL/skew combinations, and a 204 carrying the spec's
+`dvdv-warning-msg` header — an invalid matching service exists — is logged at
+warn) — see the
 [log4cats note](#many-certificates-by-alias-certmanager) at the end of the
 `utils` section for how to supply one.
 
@@ -364,7 +376,7 @@ cert once and keep it for the lifetime of the client.
 ### Configuration
 
 ```scala
-import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig, DvdvEntryPath}
+import de.thatscalaguy.zustellix.dvdv.{CacheConfig, DvdvConfig, DvdvEntryPath, RetryConfig}
 import scala.concurrent.duration.*
 
 val config = DvdvConfig(
@@ -382,11 +394,15 @@ val config = DvdvConfig(
   tokenRefreshSkew = 30.seconds,      // refresh this far ahead of expiry (clamped to at most half the token TTL)
   defaultTokenTtl  = 5.minutes,       // token lifetime assumed when the token response has no expires_in
   requestTimeout   = 30.seconds,      // per request attempt; applied by every constructor, incl. fromClient
+  retryConfig      = RetryConfig(),   // GET retries on 429/transient 5xx/transport errors: exp. backoff + jitter,
+                                      // honors Retry-After; RetryConfig.disabled turns it off
+  totalDeadline    = Some(5.minutes), // hard cap on one call incl. failover + retries; None disables
 
   cacheConfig = CacheConfig(
     categoriesTtl               = 2.hours,     // override any subset
     findAuthorityDescriptionTtl = 15.minutes,
     verifyCategoryTtl           = 1.minute,
+    negativeTtl                 = 5.minutes,   // cap on caching a `None` miss
     purgeInterval               = 1.minute     // background purge cadence for expired entries
   )
 )
@@ -406,6 +422,8 @@ Default TTLs:
 | `findServiceDescription`, `findOrganizationsByServiceElement`       | 10 minutes  |
 | `verifyCategory`                                                    | 5 minutes   |
 | `serviceVersion`, all `batch*` POSTs                                | not cached  |
+
+Misses (`None`) from `findAuthorityDescription`, `findCertificateByFingerprint` and `findServiceDescription` are cached for at most `negativeTtl` (default: 5 minutes, never longer than the endpoint's TTL), so a newly onboarded authority or certificate becomes visible quickly.
 
 Expired entries are also purged by a background fiber every `purgeInterval` (default: 1 minute), scoped to the client `Resource`, so the caches do not grow unboundedly between accesses.
 
@@ -484,6 +502,7 @@ dvdv.findAuthorityDescription(Category.unsafe("Meldebehörde"), OrganizationKey.
   case Left(DvdvError.NotFound(p))              => IO.println(s"404: ${p.detail}")
   case Left(DvdvError.ValidationError(p))       => IO.println(s"400: ${p.detail}")
   case Left(DvdvError.AuthenticationError(p))   => IO.println(s"401: ${p.detail}")
+  case Left(DvdvError.RateLimited(retryAfter, body, problem)) => IO.println(s"429 (after retries): $body")
   case Left(DvdvError.Unexpected(status, body, problem))  => IO.println(s"$status: $body")
   case Left(DvdvError.DecodingError(endpoint, cause))     => IO.println(s"$endpoint returned an undecodable body: $cause")
   case Left(DvdvError.TransportError(cause))              => IO.println(s"transport: $cause")
@@ -519,6 +538,24 @@ trait DvdvClient[F[_]]:
   def batchVerifyCategory(requests: List[Request]): F[List[VerificationResult]]
 ```
 
+#### Deviations from the published OpenAPI schema
+
+Six operations deviate from the response types `dvdv-api.yaml` declares — the
+schema is wrong there; the client decodes what real servers actually send:
+
+| Operation | Schema declares | Client decodes |
+|-----------|-----------------|----------------|
+| `findOrganizationsByServiceElement` | single `OrganizationDescription` | `List[LightweightOrganization]` |
+| `findServiceSpecificationUrisByCategory` | array of `ServiceBase` objects | `List[String]` (the URIs) |
+| `batchFindAuthorityDescription` | single `OrganizationDescription` | `List[Option[OrganizationDescription]]`, positionally aligned |
+| `batchFindOrganizationsByServiceElement` | single `OrganizationDescription` | `List[List[LightweightOrganization]]` |
+| `batchFindServiceDescription` | single `Service` | `List[Option[Service]]`, positionally aligned |
+| `batchFindServiceSpecificationUrisByCategory` | single `Request` | `List[List[String]]` |
+
+These wire shapes are pinned by fixtures under `dvdv/src/test/resources`. The
+batch positional-null miss encoding mirrors the single-call 204/404 miss
+semantics, since the spec does not specify a batch miss encoding.
+
 ---
 
 ## `osci` — OSCI messaging (sync + async)
@@ -530,7 +567,7 @@ one:
 |-----------|-------------------|-------|
 | `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche), returns an `OsciResponse` |
 | `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
-| `OsciMailbox.pending` / `fetch`| `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie) |
+| `OsciMailbox.pending` / `fetch` / `drain` | `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie); `drain` batches listing + fetches into one dialog |
 
 Recipients are addressed by their `Ags` (amtlicher Gemeindeschlüssel) — an
 opaque type that only admits well-formed keys: `Ags.from("01001000")`
@@ -603,8 +640,11 @@ not close it.
 - `xml: Option[String]` — the recipient's decrypted (and per policy
   signature-checked) response payload; `None` when the answer carried no
   extractable content;
-- `messageId: String` — the intermediary-issued message id, the handle for
-  any later process-card inquiry;
+- `messageId: String` — empty by default: the default wire profile skips the
+  `GetMessageId` round trip. Set `OsciConfig(explicitDialog = true)` to get
+  an intermediary-issued id (the handle for any later process-card inquiry)
+  at the cost of an extra round trip — see
+  [Wire round trips](#wire-round-trips);
 - `status: String` — the top OSCI feedback code (e.g. `"0800"`);
 - `warnings: List[OsciFeedback]` — warning-class (`3xxx`) feedback, e.g.
   `3802` (see [OSCI feedback codes](#osci-feedback-codes)).
@@ -629,6 +669,27 @@ OsciClient.resource[IO](xfamConfig, dvdv, LaufzettelSink.console[IO]).use { osci
   }
 }
 ```
+
+### Wire round trips
+
+By default each operation uses the leanest OSCI dialog shape the protocol
+(and osci-bibliothek) allows:
+
+- `request` = `InitDialog` + `MediateDelivery` + `ExitDialog` (3 round
+  trips). osci-bibliothek cannot send a `MediateDelivery` in an implicit
+  dialog, so the dialog frame stays; the saving is the skipped
+  `GetMessageId` — which also means `OsciResponse.messageId` /
+  `Laufzettel.messageId` are empty, and no request process card is written
+  at the intermediary (OSCI ties the process card — and the `subject` — to
+  the message id).
+- `send` = `GetMessageId` + `StoreDelivery`, both in implicit dialogs (2
+  round trips). The receipt still carries the intermediary-issued
+  `messageId` — `StoreDelivery` requires one.
+
+`OsciConfig(explicitDialog = true)` restores the previous
+`GetMessageId` + `InitDialog` + delivery + `ExitDialog` flow (4 round trips)
+for both operations — use it when downstream systems key on `request`'s
+`messageId`, or for an intermediary that rejects implicit deliveries.
 
 ### Receiving: `OsciMailbox` (fetch + ack)
 
@@ -669,23 +730,71 @@ OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
 }
 ```
 
-A `pending` listing is capped at `fetchLimit`. When the mailbox holds more,
+`pending` lists deliveries oldest first — an order the intermediary's
+`FetchProcessCard` response produces, not one this module imposes. A
+`pending` listing is capped at `fetchLimit`. When the mailbox holds more,
 the intermediary flags the response with feedback code `3800` / `3801` —
 surfaced as `PendingPage.truncated` (the raw entries are in
 `PendingPage.warnings`). Since fetching acknowledges (see below), fetch the
 listed deliveries and call `pending` again for the next page; the count of a
 page alone cannot tell a full listing from a cut-off one.
 
+**Draining in one dialog.** Every `pending` / `fetch` call opens and closes
+its own OSCI dialog (`InitDialog` … `ExitDialog`), so emptying a mailbox of N
+messages that way costs 3 + 3N round trips. `drain(maxMessages)` batches the
+whole sweep into ONE dialog — `InitDialog` + `FetchProcessCard` + one
+`FetchDelivery` per message + `ExitDialog`, i.e. N+3 round trips:
+
+```scala
+OsciMailbox.resource[IO](mailboxConfig, cert).use { mailbox =>
+  mailbox.drain(maxMessages = 50).flatMap { result =>
+    result.messages.traverse_ { msg =>
+      IO.println(s"${msg.messageId} [${msg.subject}]: ${msg.xml}")
+    } *>
+      result.failure.traverse_(f => IO.println(s"drain stopped at ${f.messageId}: ${f.error}")) *>
+      IO.println("more waiting, drain again").unlessA(result.complete)
+  }
+}
+```
+
+`MailboxDrain` carries the listed `page` (at most `min(fetchLimit,
+maxMessages)` process cards), the fetched `messages` in listing order, and an
+optional `failure`. The fetches acknowledge exactly like `fetch` does — which
+shapes the failure semantics: a failing fetch does **not** raise, because the
+messages fetched before it are already acknowledged at the intermediary and
+discarding them would lose acknowledged deliveries. Instead the drain stops,
+returns the partial result and reports the failed id on
+`MailboxDrain.failure` (deliveries never fetched stay pending for the next
+drain; the failed one may itself already be acknowledged — surface or persist
+the failure rather than waiting for a re-listing). `result.complete` is true
+when nothing failed, the listing was not truncated and every listed delivery
+was fetched. A failure of the *listing* (an `InitDialog` refusal, a
+`FetchProcessCard` error) raises like `pending` would.
+
+`drain` trades the strictest crash-safety for round trips: it cannot persist
+ids between listing and fetching, so the strict at-least-once pattern below
+(`pending` → persist ids → `fetch`) remains the choice for consumers that
+must not lose a message to a crash mid-sweep.
+
 **Acknowledgement semantics.** OSCI 1.2 has no separate ack message — a
 successful `fetch` makes the intermediary record a *reception* entry on the
 message's process card, which removes it from `pending`. The fetch **is** the
-acknowledgement: an un-acked (never fetched) message keeps showing up in
-`pending`, a fetched one never does.
+acknowledgement — there is no peek-without-ack: an un-acked (never fetched)
+message keeps showing up in `pending`, a fetched one never does.
 
 **At-least-once processing** is the caller's to build, and the API is shaped
 for it: persist the `messageId`s from `pending` *before* fetching, and after a
-crash re-`fetch` the unprocessed ids directly — deliveries remain stored at
-the intermediary after reception (subject to its retention policy).
+crash re-`fetch` the unprocessed ids directly. Whether a re-`fetch` still
+finds a delivery once its reception entry exists is the intermediary's
+retention policy — this module cannot verify it. The gated integration test
+(`OsciBibBridgeIT`, "re-fetch by id after reception still returns the
+delivery", enabled via the `OSCI_IT_MAILBOX_*` variables) asserts
+re-fetchability; treat the guarantee as verified only against intermediaries
+that test has been run against. The possible loss window is between `fetch`
+and durable processing by the caller: against an intermediary that purges on
+reception, a crash there loses the message. Callers needing a stronger
+guarantee should persist the raw message immediately on receipt, before any
+further processing.
 
 One mailbox can serve several profiles; filter on `PendingDelivery.subject`
 client-side if you need to split them.
@@ -772,6 +881,13 @@ OsciClient.resource[IO](osciConfig, dvdv, LaufzettelSink.console[IO], myTranspor
 OsciMailbox.resource[IO](mailboxConfig, cert, myTransport)
 ```
 
+`OsciHttpTransport` opens plain `HttpURLConnection`s via `URL.openConnection()`,
+so outbound proxies are honored only through the JVM's default `ProxySelector` —
+i.e. the standard proxy system properties (`https.proxyHost` / `https.proxyPort`,
+`http.proxyHost` / `http.proxyPort`, `http.nonProxyHosts`, or
+`java.net.useSystemProxies`). Anything richer — PAC scripts, per-route proxies,
+proxy authentication — needs a custom `TransportI` as shown above.
+
 ### Multi-tenant facade
 
 `OsciFacade` dispatches `request` / `send` by tenant. Build it from a
@@ -811,6 +927,7 @@ tenant.flensburg.connectTimeoutMs = 5000
 tenant.flensburg.readTimeoutMs    = 60000
 tenant.flensburg.contentSignatures = require
 tenant.flensburg.capturePayloads   = true
+tenant.flensburg.explicitDialog    = false
 
 tenant.kiel.cert.type     = pem
 tenant.kiel.cert.path     = /secrets/kiel-cert.pem
@@ -823,7 +940,10 @@ Personensuche WSDL and `XMeld`; `connectTimeoutMs` / `readTimeoutMs` are
 optional and default to 10 s / 120 s; `contentSignatures` is optional —
 `require` or `warn`, default `warn`; `capturePayloads` is optional —
 `true` stores the decrypted response XML on `Laufzettel.rawXml`, default
-`false`, see [Laufzettel](#laufzettel).)
+`false`, see [Laufzettel](#laufzettel); `explicitDialog` is optional —
+`true` restores the 4-round-trip wire profile with an intermediary-issued
+`messageId` for `request`, default `false`, see
+[Wire round trips](#wire-round-trips).)
 
 `fromConfigs` is all-or-nothing: every tenant client is built eagerly when
 the resource is acquired, and a tenant whose cert fails to load fails the
@@ -831,7 +951,20 @@ whole facade with an `OsciError.TenantInitFailed` naming that tenant — there
 is no partial boot.
 
 Multi-tenant mailboxes are simply multiple `OsciMailbox.resource` calls — one
-per tenant cert/intermediary.
+per tenant cert/intermediary. Register them beside the clients to dispatch
+them through the facade too — `facade.tenants` then lists every registered
+tenant and `facade.mailbox(tenant)` yields the tenant's mailbox
+(`pending` / `fetch` / `drain`):
+
+```scala
+val registry = TenantRegistry.inMemory[IO](clientsByTenant, mailboxesByTenant)
+val facade   = OsciFacade.fromRegistry[IO](registry)
+
+facade.mailbox(TenantId("kiel")).flatMap(_.drain(maxMessages = 10))
+```
+
+(`fromConfigs` registers no mailboxes — the properties file carries only
+client configs — so `facade.mailbox` there raises `OsciError.UnknownTenant`.)
 
 ### Shared certificates by alias
 

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv.model
 
 import io.circe.parser.decode
@@ -111,6 +127,22 @@ class CodecsSpec extends FunSuite {
     assertEquals(r.toOption.get.expires_in, Some(86400L))
   }
 
+  // dvdv-api.yaml's AccessToken schema is snake_case (access_token/expires_in/
+  // token_type) while the spec's response example shows camelCase (accessToken/
+  // expiresIn/tokenType); the codec deliberately follows the schema — the OIDC
+  // wire format real servers emit.
+  test("AccessTokenResponse decodes the real token fixture with the schema's snake_case fields") {
+    val parsed = decode[AccessTokenResponse](fixture("AccessToken.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val tok = parsed.toOption.get
+    assert(tok.access_token.startsWith("eyJ"), tok.access_token)
+    assertEquals(tok.expires_in, Some(86400L))
+    assertEquals(tok.refresh_expires_in, Some(0L))
+    assertEquals(tok.token_type, Some("Bearer"))
+    assertEquals(tok.`not-before-policy`, Some(0))
+    assertEquals(tok.scope, Some("email profile dvdv2-kernsystem-application-client-scope"))
+  }
+
   test("LightweightOrganization decodes the real fixture (category null)") {
     val parsed = decode[LightweightOrganization](fixture("OrganizationLightweight.json"))
     assert(parsed.isRight, s"failed: $parsed")
@@ -143,5 +175,71 @@ class CodecsSpec extends FunSuite {
     val od = parsed.toOption.get
     assertEquals(od.organization.flatMap(_.id), None)
     assertEquals(od.organization.flatMap(_.category), None)
+  }
+
+  // The batch fixtures pin the client's deviations from the published OpenAPI
+  // schema (issue #25): dvdv-api.yaml declares a single object as the 200
+  // response of four of the six batch endpoints, while the client decodes a
+  // positionally aligned JSON array — with a null per miss, mirroring the
+  // single-call 204/404 miss semantics (the spec does not specify a batch miss
+  // encoding). A client regenerated against the schema's declared types fails
+  // these tests loudly. batchFindCategories and batchVerifyCategory match the
+  // schema and are pinned for completeness.
+  test("batchFindAuthorityDescription response decodes as a positional array of nullable OrganizationDescription") {
+    val parsed = decode[List[Option[OrganizationDescription]]](fixture("batchFindAuthorityDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.flatMap(_.organization).map(_.nameDe), Some("der-orga-name"))
+    assertEquals(results(1), None)
+  }
+
+  test("batchFindCategories response decodes as an array of category-name arrays") {
+    assertEquals(
+      decode[List[List[String]]](fixture("batchFindCategories.json")),
+      Right(List(List("Aufnahmeeinrichtung", "Meldebehörde"), Nil))
+    )
+  }
+
+  test("batchFindOrganizationsByServiceElement response decodes as an array of LightweightOrganization arrays") {
+    val parsed = decode[List[List[LightweightOrganization]]](fixture("batchFindOrganizationsByServiceElement.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.head.id, Some(4711L))
+    assertEquals(results.head.head.organizationKeys, List("foo:1234", "bar:4321"))
+    assertEquals(results(1), Nil)
+  }
+
+  test("batchFindServiceDescription response decodes as a positional array of nullable Service") {
+    val parsed = decode[List[Option[Service]]](fixture("batchFindServiceDescription.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(results.size, 2)
+    assertEquals(results.head.flatMap(_.nameDe), Some("test-servicename"))
+    assertEquals(results(1), None)
+  }
+
+  test("batchFindServiceSpecificationUrisByCategory response decodes as an array of URI-string arrays") {
+    val parsed = decode[List[List[String]]](fixture("batchFindServiceSpecificationUrisByCategory.json"))
+    assert(parsed.isRight, s"failed: $parsed")
+    val results = parsed.toOption.get
+    assertEquals(
+      results.head,
+      List(
+        "http://www.osci.de/xauslaender1170/xauslaender1170ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xauslaender1180/xauslaender1180ASYLBAMFAE.wsdl",
+        "http://www.osci.de/xinneres/quittung/2/xinneresquittungv2.wsdl",
+        "http://www.osci.de/xinneres/quittung/3/xinneresquittungv3.wsdl"
+      )
+    )
+    assertEquals(results(1), Nil)
+  }
+
+  test("batchVerifyCategory response decodes as an array of VerificationResult") {
+    assertEquals(
+      decode[List[VerificationResult]](fixture("batchVerifyCategory.json")),
+      Right(List(VerificationResult(true), VerificationResult(false)))
+    )
   }
 }

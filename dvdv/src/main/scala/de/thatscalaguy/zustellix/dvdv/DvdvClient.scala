@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{Async, Resource, Sync}
@@ -5,12 +21,13 @@ import cats.effect.syntax.all.*
 import cats.syntax.functor.*
 import de.thatscalaguy.zustellix.dvdv.auth.{AuthMiddleware, TokenManager}
 import de.thatscalaguy.zustellix.utils.cert.{CertLoader, CertManager, CertAlias, LoadedCert}
-import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient}
+import de.thatscalaguy.zustellix.dvdv.internal.{CachedDvdvClient, FailoverClient, HttpDvdvClient, RetrySupport}
 import de.thatscalaguy.zustellix.dvdv.model.*
 import fs2.io.net.Network
 import org.http4s.Response
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.client.Client
+import org.http4s.client.middleware.Retry
 import org.typelevel.log4cats.LoggerFactory
 
 import java.util.concurrent.TimeoutException
@@ -95,7 +112,9 @@ object DvdvClient {
    *  Token + caches are scoped to this resource — each tenant gets its own.
    *
    *  All constructors need a `LoggerFactory[F]` in scope for the auth layer's
-   *  warnings — e.g. log4cats' `Slf4jFactory`, or `NoOpFactory` in tests.
+   *  warnings and for the warning logged when a 204 carries the spec's
+   *  `dvdv-warning-msg` header — e.g. log4cats' `Slf4jFactory`, or
+   *  `NoOpFactory` in tests.
    */
   def resource[F[_]: Async: Network: LoggerFactory](config: DvdvConfig): Resource[F, DvdvClient[F]] =
     for {
@@ -214,7 +233,38 @@ object DvdvClient {
                        .eval(TokenManager.make[F](tokenHttp, config, resolve, tokenEp))
                        .map(tokenMgr => AuthMiddleware(tokenMgr)(failover))
                    } else Resource.pure[F, Client[F]](failover)
-      raw       = HttpDvdvClient[F](directory, config)
+      retried   = applyRetry(config, directory)
+      bounded   = applyTotalDeadline(config, retried)
+      raw       = HttpDvdvClient[F](bounded, config)
       cached   <- CachedDvdvClient.make[F](raw, config.cacheConfig)
     } yield cached
+
+  /** Applies the [[RetryConfig]] retry middleware. It sits OUTSIDE the auth
+   *  and failover middlewares, so one attempt is one full failover pass and a
+   *  retry re-enters auth (fresh bearer, fresh 401-retry budget) and failover
+   *  from the top. Token POSTs run beneath this layer and are POSTs anyway,
+   *  so they are never retried by it.
+   */
+  private def applyRetry[F[_]: Async](config: DvdvConfig, http: Client[F]): Client[F] =
+    if (config.retryConfig.maxRetries <= 0) http
+    else Retry[F](RetrySupport.policy[F](config.retryConfig))(http)
+
+  /** Applies [[DvdvConfig.totalDeadline]] at the outermost layer. Like
+   *  [[applyRequestTimeout]] it bounds acquisition of the response — the
+   *  failover passes, token fetches and retry sleeps all happen during
+   *  acquisition — and raises `java.util.concurrent.TimeoutException`.
+   */
+  private def applyTotalDeadline[F[_]: Async](config: DvdvConfig, http: Client[F]): Client[F] =
+    config.totalDeadline.fold(http) { deadline =>
+      Client[F] { req =>
+        http
+          .run(req)
+          .timeoutTo(
+            deadline,
+            Resource.raiseError[F, Response[F], Throwable](
+              new TimeoutException(s"DVDV request exceeded the total deadline of $deadline: ${req.method} ${req.uri}")
+            )
+          )
+      }
+    }
 }

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci
 
 import cats.effect.{IO, Ref, Resource}
@@ -165,6 +181,69 @@ class OsciFacadeSpec extends CatsEffectSuite {
     } yield {
       assertEquals(r1, Left(boom))
       assertEquals(r2, Left(boom))
+    }
+  }
+
+  test("tenants lists the registry's tenant ids") {
+    for {
+      fc          <- dispatchFacade
+      (facade, _)  = fc
+      ids         <- facade.tenants
+    } yield assertEquals(ids, Set(TenantId("alice"), TenantId("bob")))
+  }
+
+  // Mailbox dispatch: facade.mailbox selects the tenant's mailbox, so its
+  // whole algebra — pending/fetch/drain — is reachable per tenant.
+
+  private def recordingMailbox(
+      tenant: TenantId,
+      calls:  Ref[IO, List[(TenantId, Int)]]
+  ): OsciMailbox[IO] =
+    new OsciMailbox[IO] {
+      def pending: IO[PendingPage] = IO.pure(PendingPage(Nil))
+      def fetch(messageId: String): IO[OsciMessage] =
+        IO.pure(
+          OsciMessage(messageId, None, s"<xml>${tenant.value}</xml>", None, None, ContentSignatureStatus.Valid)
+        )
+      def drain(maxMessages: Int): IO[MailboxDrain] =
+        calls.update(_ :+ (tenant, maxMessages)).as(
+          MailboxDrain(PendingPage(List(PendingDelivery(s"pending-${tenant.value}", None, None))), Nil)
+        )
+    }
+
+  private def mailboxFacade: IO[(OsciFacade[IO], Ref[IO, List[(TenantId, Int)]])] =
+    IO.ref(List.empty[(TenantId, Int)]).map { calls =>
+      val registry = TenantRegistry.inMemory[IO](
+        Map.empty[TenantId, OsciClient[IO]],
+        Map(
+          TenantId("alice") -> recordingMailbox(TenantId("alice"), calls),
+          TenantId("bob")   -> recordingMailbox(TenantId("bob"), calls)
+        )
+      )
+      (OsciFacade.fromRegistry[IO](registry), calls)
+    }
+
+  test("mailbox routes to the named tenant's mailbox and drain is reachable through it") {
+    for {
+      fc            <- mailboxFacade
+      (facade, calls) = fc
+      drained       <- facade.mailbox(TenantId("bob")).flatMap(_.drain(3))
+      recorded      <- calls.get
+    } yield {
+      assertEquals(drained.page.deliveries.map(_.messageId), List("pending-bob"))
+      assertEquals(recorded, List((TenantId("bob"), 3)))
+    }
+  }
+
+  test("mailbox for a tenant without a registered mailbox raises UnknownTenant") {
+    for {
+      fc            <- mailboxFacade
+      (facade, calls) = fc
+      e             <- interceptIO[OsciError.UnknownTenant](facade.mailbox(TenantId("nobody")))
+      recorded      <- calls.get
+    } yield {
+      assertEquals(e.id, TenantId("nobody"))
+      assertEquals(recorded, Nil)
     }
   }
 }

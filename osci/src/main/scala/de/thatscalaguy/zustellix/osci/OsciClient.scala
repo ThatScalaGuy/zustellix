@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 ThatScalaGuy
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package de.thatscalaguy.zustellix.osci
 
 import cats.effect.{Async, Resource}
@@ -13,8 +29,9 @@ trait OsciClient[F[_]] {
   /** Synchronous request/response (`MediateDelivery`): the recipient answers
    *  within the call, e.g. the XMeld Personensuche. The returned
    *  [[OsciResponse]] carries the response payload (`None` when the answer
-   *  had no extractable content) together with the intermediary's
-   *  `messageId`, `status` and `3xxx` warnings.
+   *  had no extractable content) together with the `messageId` (empty by
+   *  default — set [[OsciConfig.explicitDialog]] for an intermediary-issued
+   *  id), `status` and `3xxx` warnings.
    */
   def request(ags: Ags, xml: String): F[OsciResponse]
 
@@ -74,7 +91,10 @@ object OsciClient {
       )
     )
     Resource.eval(certSource)
-      .flatMap(internal.OsciBibBridge.resource[F](_, transport, config.contentSignatures))
+      .flatMap(
+        internal.OsciBibBridge
+          .resource[F](_, transport, config.contentSignatures, config.explicitDialog)
+      )
       .map { bridge =>
         new internal.OsciClientImpl[F](
           config.tenantId, config.subject, bridge, resolver, sink, config.capturePayloads
@@ -114,12 +134,13 @@ object OsciClient {
       transport: TransportI
   ): Resource[F, OsciClient[F]] = {
     val resolver = internal.AgsResolver[F](dvdv, config)
-    internal.OsciBibBridge.resource[F](certs, alias, transport, config.contentSignatures).map {
-      bridge =>
+    internal.OsciBibBridge
+      .resource[F](certs, alias, transport, config.contentSignatures, config.explicitDialog)
+      .map { bridge =>
         new internal.OsciClientImpl[F](
           TenantId(alias.value), config.subject, bridge, resolver, sink, config.capturePayloads
         )
-    }
+      }
   }
 
   private def defaultTransport(config: OsciConfig): TransportI =
