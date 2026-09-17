@@ -16,6 +16,8 @@
 
 package de.thatscalaguy.zustellix.osci
 
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
+
 /** Amtlicher Gemeindeschlüssel (AGS) — the 8-digit official municipality key
  *  that addresses the recipient authority in DVDV lookups.
  *
@@ -40,4 +42,7 @@ object Ags {
   def unsafe(s: String): Ags = from(s).fold(throw _, identity)
 
   extension (a: Ags) def value: String = a
+
+  /** The DVDV organization key of the municipality: `ags:<8 digits>`. */
+  extension (a: Ags) def organizationKey: OrganizationKey = OrganizationKey.unsafe(s"ags:$a")
 }

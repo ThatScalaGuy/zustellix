@@ -102,21 +102,21 @@ class OsciFacadeSpec extends CatsEffectSuite {
 
   private def recordingClient(
       tenant: TenantId,
-      calls:  Ref[IO, List[(TenantId, Ags, String)]]
+      calls:  Ref[IO, List[(TenantId, OrganizationKey, String)]]
   ): OsciClient[IO] =
     new OsciClient[IO] {
-      def request(ags: Ags, xml: String): IO[OsciResponse] =
-        calls.update(_ :+ (tenant, ags, xml)).as(
+      def request(recipient: OrganizationKey, xml: String): IO[OsciResponse] =
+        calls.update(_ :+ (tenant, recipient, xml)).as(
           OsciResponse(Some(s"<rsp>${tenant.value}</rsp>"), s"msg-${tenant.value}", "0800")
         )
-      def send(ags: Ags, xml: String): IO[OsciReceipt] =
-        calls.update(_ :+ (tenant, ags, xml)).as(
+      def send(recipient: OrganizationKey, xml: String): IO[OsciReceipt] =
+        calls.update(_ :+ (tenant, recipient, xml)).as(
           OsciReceipt(s"msg-${tenant.value}", "0800", None)
         )
     }
 
-  private def dispatchFacade: IO[(OsciFacade[IO], Ref[IO, List[(TenantId, Ags, String)]])] =
-    IO.ref(List.empty[(TenantId, Ags, String)]).map { calls =>
+  private def dispatchFacade: IO[(OsciFacade[IO], Ref[IO, List[(TenantId, OrganizationKey, String)]])] =
+    IO.ref(List.empty[(TenantId, OrganizationKey, String)]).map { calls =>
       val registry = TenantRegistry.inMemory[IO](
         Map(
           TenantId("alice") -> recordingClient(TenantId("alice"), calls),
@@ -136,7 +136,7 @@ class OsciFacadeSpec extends CatsEffectSuite {
       recorded      <- calls.get
     } yield {
       assertEquals(rsp, OsciResponse(Some("<rsp>bob</rsp>"), "msg-bob", "0800"))
-      assertEquals(recorded, List((TenantId("bob"), ags, "<xml>q</xml>")))
+      assertEquals(recorded, List((TenantId("bob"), ags.organizationKey, "<xml>q</xml>")))
     }
   }
 
@@ -148,7 +148,7 @@ class OsciFacadeSpec extends CatsEffectSuite {
       recorded      <- calls.get
     } yield {
       assertEquals(receipt, OsciReceipt("msg-alice", "0800", None))
-      assertEquals(recorded, List((TenantId("alice"), ags, "<xml>s</xml>")))
+      assertEquals(recorded, List((TenantId("alice"), ags.organizationKey, "<xml>s</xml>")))
     }
   }
 
@@ -167,10 +167,10 @@ class OsciFacadeSpec extends CatsEffectSuite {
   }
 
   test("a client failure propagates unwrapped through the facade") {
-    val boom = OsciError.AgsNotInDvdv(ags, "http://example/wsdl")
+    val boom = OsciError.RecipientNotInDvdv(ags.organizationKey, "http://example/wsdl")
     val failing = new OsciClient[IO] {
-      def request(ags: Ags, xml: String): IO[OsciResponse] = IO.raiseError(boom)
-      def send(ags: Ags, xml: String): IO[OsciReceipt]     = IO.raiseError(boom)
+      def request(recipient: OrganizationKey, xml: String): IO[OsciResponse] = IO.raiseError(boom)
+      def send(recipient: OrganizationKey, xml: String): IO[OsciReceipt] = IO.raiseError(boom)
     }
     val facade = OsciFacade.fromRegistry[IO](
       TenantRegistry.inMemory[IO](Map(TenantId("alice") -> failing))

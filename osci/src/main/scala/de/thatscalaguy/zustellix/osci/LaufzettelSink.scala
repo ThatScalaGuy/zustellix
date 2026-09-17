@@ -32,7 +32,7 @@ object LaufzettelSink {
             if l.warnings.isEmpty then ""
             else l.warnings.map(_.code).mkString(" warnings=", ",", "")
           println(
-            s"[Laufzettel tenant=${tenant.value} ags=${l.recipientAgs.value} " +
+            s"[Laufzettel tenant=${tenant.value} recipient=${l.recipient.value} " +
               s"messageId=${l.messageId} status=${l.status.render}$warnings " +
               s"uri=${l.recipientUri} at=${l.timestamp}]"
           )

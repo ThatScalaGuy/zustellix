@@ -18,8 +18,8 @@ package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.{Clock, Sync}
 import cats.syntax.all.*
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
 import de.thatscalaguy.zustellix.osci.{
-  Ags,
   Laufzettel,
   LaufzettelSink,
   LaufzettelStatus,
@@ -44,17 +44,17 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
 
   private val log = LoggerFactory[F].getLogger
 
-  def request(ags: Ags, xml: String): F[OsciResponse] =
+  def request(recipient: OrganizationKey, xml: String): F[OsciResponse] =
     for {
-      route  <- resolver.resolve(ags)
-                  .onError { case e => recordFailure(ags, None, e) }
+      route  <- resolver.resolve(recipient)
+                  .onError { case e => recordFailure(recipient, None, e) }
       result <- transport.mediate(route, subject, xml)
-                  .onError { case e => recordFailure(ags, Some(route.addresseeUri), e) }
+                  .onError { case e => recordFailure(recipient, Some(route.addresseeUri), e) }
       now    <- Clock[F].realTimeInstant
       lz      = Laufzettel(
                   messageId    = result.messageId,
                   timestamp    = now,
-                  recipientAgs = ags,
+                  recipient    = recipient,
                   recipientUri = route.addresseeUri,
                   status       = LaufzettelStatus.Feedback(result.status),
                   rawXml       = if capturePayloads then result.responseXml else None,
@@ -70,17 +70,17 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
       warnings  = result.warnings
     )
 
-  def send(ags: Ags, xml: String): F[OsciReceipt] =
+  def send(recipient: OrganizationKey, xml: String): F[OsciReceipt] =
     for {
-      route   <- resolver.resolve(ags)
-                   .onError { case e => recordFailure(ags, None, e) }
+      route   <- resolver.resolve(recipient)
+                   .onError { case e => recordFailure(recipient, None, e) }
       receipt <- transport.store(route, subject, xml)
-                   .onError { case e => recordFailure(ags, Some(route.addresseeUri), e) }
+                   .onError { case e => recordFailure(recipient, Some(route.addresseeUri), e) }
       now     <- Clock[F].realTimeInstant
       lz       = Laufzettel(
                    messageId    = receipt.messageId,
                    timestamp    = now,
-                   recipientAgs = ags,
+                   recipient    = recipient,
                    recipientUri = route.addresseeUri,
                    status       = LaufzettelStatus.Feedback(receipt.status),
                    rawXml       = None, // async: no response payload at store time
@@ -98,7 +98,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
       .onError { case e =>
         log.warn(e)(
           "LaufzettelSink.record failed — Laufzettel dropped " +
-            s"(tenant=${tenantId.value} ags=${lz.recipientAgs.value} " +
+            s"(tenant=${tenantId.value} recipient=${lz.recipient.value} " +
             s"messageId=${lz.messageId} status=${lz.status.render})"
         )
       }
@@ -114,12 +114,12 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
    *  original error is re-raised untouched, and a sink failure is logged at
    *  warn and then swallowed like on the success path.
    */
-  private def recordFailure(ags: Ags, uri: Option[URI], e: Throwable): F[Unit] =
+  private def recordFailure(recipient: OrganizationKey, uri: Option[URI], e: Throwable): F[Unit] =
     Clock[F].realTimeInstant.flatMap { now =>
       val lz = Laufzettel(
         messageId    = failureMessageId(e),
         timestamp    = now,
-        recipientAgs = ags,
+        recipient    = recipient,
         recipientUri = uri.getOrElse(URI.create("")),
         status       = failureStatus(e),
         rawXml       = None
