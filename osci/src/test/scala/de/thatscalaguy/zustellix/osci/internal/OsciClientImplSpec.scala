@@ -17,6 +17,7 @@
 package de.thatscalaguy.zustellix.osci.internal
 
 import cats.effect.{IO, Ref}
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
 import de.thatscalaguy.zustellix.osci.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.LoggerFactory
@@ -32,6 +33,8 @@ class OsciClientImplSpec extends CatsEffectSuite {
 
   private val TestAgs = Ags.unsafe("01001000")
   private val NopeAgs = Ags.unsafe("99999999")
+  private val TestKey = TestAgs.organizationKey
+  private val NopeKey = NopeAgs.organizationKey
 
   // The impl never inspects the certs; they're threaded through to the
   // transport. Null references are sufficient for these tests.
@@ -44,11 +47,11 @@ class OsciClientImplSpec extends CatsEffectSuite {
   )
 
   private def fixedResolver(route: OsciRoute): AgsResolver[IO] = new AgsResolver[IO] {
-    def resolve(ags: Ags): IO[OsciRoute] = IO.pure(route)
+    def resolve(recipient: OrganizationKey): IO[OsciRoute] = IO.pure(route)
   }
 
   private def failingResolver(err: Throwable): AgsResolver[IO] = new AgsResolver[IO] {
-    def resolve(ags: Ags): IO[OsciRoute] = IO.raiseError(err)
+    def resolve(recipient: OrganizationKey): IO[OsciRoute] = IO.raiseError(err)
   }
 
   private def fixedTransport(out: OsciRawResult): OsciTransport[IO] = new OsciTransport[IO] {
@@ -112,7 +115,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(out, OsciResponse(Some("<resp/>"), "msg-1", "OK"))
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "msg-1")
-        assertEquals(seen.head.recipientAgs, TestAgs)
+        assertEquals(seen.head.recipient, TestKey)
         assertEquals(seen.head.status, LaufzettelStatus.Feedback("OK"))
         assertEquals(seen.head.rawXml, None)
       }
@@ -262,7 +265,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(out, Left(err))
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "msg-9")
-        assertEquals(seen.head.recipientAgs, TestAgs)
+        assertEquals(seen.head.recipient, TestKey)
         assertEquals(seen.head.recipientUri, Route.addresseeUri)
         assertEquals(seen.head.status, LaufzettelStatus.Feedback("9000"))
         assertEquals(seen.head.rawXml, None)
@@ -296,7 +299,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
   }
 
   test("request: a resolver failure records a failure Laufzettel without a recipient URI") {
-    val err = OsciError.AgsNotInDvdv(NopeAgs, "u")
+    val err = OsciError.RecipientNotInDvdv(NopeKey, "u")
     Ref.of[IO, Vector[Laufzettel]](Vector.empty).flatMap { ref =>
       val impl = new OsciClientImpl[IO](
         TenantId("alice"),
@@ -312,9 +315,9 @@ class OsciClientImplSpec extends CatsEffectSuite {
       yield {
         assertEquals(out, Left(err))
         assertEquals(seen.size, 1)
-        assertEquals(seen.head.recipientAgs, NopeAgs)
+        assertEquals(seen.head.recipient, NopeKey)
         assertEquals(seen.head.recipientUri, URI.create(""))
-        assertEquals(seen.head.status, LaufzettelStatus.Failed("AgsNotInDvdv"))
+        assertEquals(seen.head.status, LaufzettelStatus.Failed("RecipientNotInDvdv"))
         assertEquals(seen.head.messageId, "")
       }
     }
@@ -335,16 +338,16 @@ class OsciClientImplSpec extends CatsEffectSuite {
     }
   }
 
-  test("AgsNotInDvdv from resolver bubbles up") {
+  test("RecipientNotInDvdv from resolver bubbles up") {
     val impl = new OsciClientImpl[IO](
       TenantId("alice"),
       "XMeld",
       fixedTransport(OsciRawResult(Some("<x/>"), "m", "OK")),
-      failingResolver(OsciError.AgsNotInDvdv(NopeAgs, "u")),
+      failingResolver(OsciError.RecipientNotInDvdv(NopeKey, "u")),
       LaufzettelSink.noop[IO]
     )
     impl.request(NopeAgs, "<x/>").attempt.map {
-      case Left(OsciError.AgsNotInDvdv(NopeAgs, "u")) => ()
+      case Left(OsciError.RecipientNotInDvdv(NopeKey, "u")) => ()
       case other                                           => fail(s"unexpected: $other")
     }
   }
@@ -394,7 +397,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(out, receipt)
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "msg-2")
-        assertEquals(seen.head.recipientAgs, TestAgs)
+        assertEquals(seen.head.recipient, TestKey)
         assertEquals(seen.head.status, LaufzettelStatus.Feedback("0800"))
         assertEquals(seen.head.rawXml, None)
       }
@@ -434,7 +437,7 @@ class OsciClientImplSpec extends CatsEffectSuite {
         assertEquals(out, Left(err))
         assertEquals(seen.size, 1)
         assertEquals(seen.head.messageId, "msg-3")
-        assertEquals(seen.head.recipientAgs, TestAgs)
+        assertEquals(seen.head.recipient, TestKey)
         assertEquals(seen.head.recipientUri, Route.addresseeUri)
         assertEquals(seen.head.status, LaufzettelStatus.Feedback("9802"))
         assertEquals(seen.head.rawXml, None)

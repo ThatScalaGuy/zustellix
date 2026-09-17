@@ -29,7 +29,7 @@ import java.util.Base64
 
 class AgsResolverSpec extends CatsEffectSuite {
 
-  private val TestAgs = Ags.unsafe("01001000")
+  private val TestAgs = Ags.unsafe("01001000").organizationKey
 
   private val Cfg = OsciConfig(
     tenantId   = TenantId("t"),
@@ -130,12 +130,26 @@ class AgsResolverSpec extends CatsEffectSuite {
     }
   }
 
-  test("resolve raises AgsNotInDvdv when DVDV returns None") {
-    val unknown = Ags.unsafe("99999999")
+  test("resolve passes a non-AGS organization key to DVDV unchanged") {
+    val dvdv = stubDvdv {
+      case ("egs:0815", _) =>
+        IO.pure(Some(serviceWithElements(List(
+          element(ServiceElementType.OSCI_ADDRESSEE,    Some("https://recipient/osci"), Some(testCertB64)),
+          element(ServiceElementType.OSCI_INTERMEDIARY, Some("https://intermed/osci"),  Some(testCertB64))
+        ))))
+      case other => IO.raiseError(new AssertionError(s"unexpected: $other"))
+    }
+    AgsResolver[IO](dvdv, Cfg).resolve(OrganizationKey.unsafe("egs:0815")).map { route =>
+      assertEquals(route.addresseeUri.toString, "https://recipient/osci")
+    }
+  }
+
+  test("resolve raises RecipientNotInDvdv when DVDV returns None") {
+    val unknown = Ags.unsafe("99999999").organizationKey
     val dvdv    = stubDvdv((_, _) => IO.pure(None))
     AgsResolver[IO](dvdv, Cfg).resolve(unknown).attempt.map {
-      case Left(OsciError.AgsNotInDvdv(ags, _)) => assertEquals(ags, unknown)
-      case other                                     => fail(s"unexpected: $other")
+      case Left(OsciError.RecipientNotInDvdv(recipient, _)) => assertEquals(recipient, unknown)
+      case other                                            => fail(s"unexpected: $other")
     }
   }
 
@@ -156,7 +170,7 @@ class AgsResolverSpec extends CatsEffectSuite {
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
-        assertEquals(e.ags, TestAgs)
+        assertEquals(e.recipient, TestAgs)
         assertEquals(e.kind, "OSCI_ADDRESSEE")
       case other => fail(s"unexpected: $other")
     }
@@ -194,7 +208,7 @@ class AgsResolverSpec extends CatsEffectSuite {
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
-        assertEquals(e.ags, TestAgs)
+        assertEquals(e.recipient, TestAgs)
         assertEquals(e.kind, "OSCI_ADDRESSEE")
       case other => fail(s"unexpected: $other")
     }
@@ -254,7 +268,7 @@ class AgsResolverSpec extends CatsEffectSuite {
     )))))
     AgsResolver[IO](dvdv, Cfg).resolve(TestAgs).attempt.map {
       case Left(e: OsciError.RecipientCertMissing) =>
-        assertEquals(e.ags, TestAgs)
+        assertEquals(e.recipient, TestAgs)
         assertEquals(e.kind, "OSCI_INTERMEDIARY")
       case other => fail(s"unexpected: $other")
     }

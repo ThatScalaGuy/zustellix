@@ -33,25 +33,25 @@ class OsciErrorSpec extends FunSuite {
     assert(e.getMessage.contains("8 digits"))
   }
 
-  test("AgsNotInDvdv message includes the AGS and service URI") {
-    val e = OsciError.AgsNotInDvdv(Ags.unsafe("01001000"), "http://example/wsdl")
+  test("RecipientNotInDvdv message includes the recipient and service URI") {
+    val e = OsciError.RecipientNotInDvdv(Ags.unsafe("01001000").organizationKey, "http://example/wsdl")
     assert(e.getMessage.contains("01001000"))
     assert(e.getMessage.contains("http://example/wsdl"))
   }
 
-  test("RecipientCertMissing message includes the AGS and the element kind") {
-    val e = OsciError.RecipientCertMissing(Ags.unsafe("01001000"), "OSCI_ADDRESSEE")
+  test("RecipientCertMissing message includes the recipient and the element kind") {
+    val e = OsciError.RecipientCertMissing(Ags.unsafe("01001000").organizationKey, "OSCI_ADDRESSEE")
     assert(e.getMessage.contains("01001000"))
     assert(e.getMessage.contains("OSCI_ADDRESSEE"))
-    assertEquals(e.ags, Ags.unsafe("01001000"))
+    assertEquals(e.recipient, Ags.unsafe("01001000").organizationKey)
     assertEquals(e.kind, "OSCI_ADDRESSEE")
   }
 
-  test("ServiceElementMissing message includes the AGS and the element kind") {
-    val e = OsciError.ServiceElementMissing(Ags.unsafe("01001000"), "OSCI_INTERMEDIARY")
+  test("ServiceElementMissing message includes the recipient and the element kind") {
+    val e = OsciError.ServiceElementMissing(Ags.unsafe("01001000").organizationKey, "OSCI_INTERMEDIARY")
     assert(e.getMessage.contains("01001000"))
     assert(e.getMessage.contains("OSCI_INTERMEDIARY"))
-    assertEquals(e.ags, Ags.unsafe("01001000"))
+    assertEquals(e.recipient, Ags.unsafe("01001000").organizationKey)
     assertEquals(e.kind, "OSCI_INTERMEDIARY")
   }
 
@@ -96,8 +96,8 @@ class OsciErrorSpec extends FunSuite {
     val errs: List[OsciError] = List(
       OsciError.UnknownTenant(TenantId("x")),
       OsciError.InvalidAgs("x"),
-      OsciError.AgsNotInDvdv(Ags.unsafe("01001000"), "u"),
-      OsciError.RecipientCertMissing(Ags.unsafe("01001000"), "OSCI_ADDRESSEE"),
+      OsciError.RecipientNotInDvdv(Ags.unsafe("01001000").organizationKey, "u"),
+      OsciError.RecipientCertMissing(Ags.unsafe("01001000").organizationKey, "OSCI_ADDRESSEE"),
       OsciError.OsciTransport(new IOException("x")),
       OsciError.OsciResponse("c", "d"),
       OsciError.NoSuchMessage("m"),

@@ -30,7 +30,7 @@ enum LaufzettelStatus {
   case Feedback(code: String)
 
   /** No feedback code exists; `kind` names the [[OsciError]] variant that
-   *  failed the delivery (e.g. `"OsciTransport"`, `"AgsNotInDvdv"`).
+   *  failed the delivery (e.g. `"OsciTransport"`, `"RecipientNotInDvdv"`).
    */
   case Failed(kind: String)
 

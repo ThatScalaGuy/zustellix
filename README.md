@@ -165,6 +165,18 @@ libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.3.0"
 >   of being silently swallowed. Recording stays best-effort: the operation
 >   still never fails on a sink error.
 
+> **Migrating to 0.5.x:** recipients are addressed by their full DVDV
+> organization key, so keys that are not an AGS work too:
+>
+> - `OsciClient.request` / `send` and `OsciFacade.request` / `send` take an
+>   `OrganizationKey` (e.g. `ags:01001000`). The `Ags` variants are kept and
+>   prepend `ags:` themselves — callers compile unchanged. Implementors
+>   (test fakes) override the `OrganizationKey` pair instead.
+> - `Laufzettel.recipientAgs: Ags` is now `recipient: OrganizationKey`.
+> - `OsciError.AgsNotInDvdv` is now `RecipientNotInDvdv`; it,
+>   `RecipientCertMissing` and `ServiceElementMissing` carry
+>   `recipient: OrganizationKey` instead of `ags: Ags`.
+
 ---
 
 ## `utils` — certificates
@@ -565,11 +577,13 @@ one:
 
 | Operation | OSCI message type | Shape |
 |-----------|-------------------|-------|
-| `OsciClient.request(ags, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche), returns an `OsciResponse` |
-| `OsciClient.send(ags, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
+| `OsciClient.request(recipient, xml)` | `MediateDelivery` | synchronous request/response (e.g. XMeld Personensuche), returns an `OsciResponse` |
+| `OsciClient.send(recipient, xml)`    | `StoreDelivery`   | asynchronous: stored in the recipient's mailbox, returns an `OsciReceipt` |
 | `OsciMailbox.pending` / `fetch` / `drain` | `FetchProcessCard` / `FetchDelivery` | asynchronous receive + ack from your own mailbox (e.g. XFamilie); `drain` batches listing + fetches into one dialog |
 
-Recipients are addressed by their `Ags` (amtlicher Gemeindeschlüssel) — an
+Recipients are addressed by their DVDV `OrganizationKey` (e.g.
+`OrganizationKey.unsafe("ags:01001000")`). For municipalities there is the
+`Ags` (amtlicher Gemeindeschlüssel) shortcut, which prepends `ags:` itself — an
 opaque type that only admits well-formed keys: `Ags.from("01001000")`
 validates (exactly 8 digits, `Either[OsciError.InvalidAgs, Ags]`),
 `Ags.unsafe(...)` throws on bad input, `.value` reads the raw string back.
@@ -577,7 +591,7 @@ A typo fails at the call site instead of surfacing as a DVDV miss.
 
 Every outbound operation:
 
-1. calls `dvdv.findServiceDescription(OrganizationKey.unsafe("ags:<ags>"), serviceUri)` **once** per
+1. calls `dvdv.findServiceDescription(recipient, serviceUri)` **once** per
    call (memoized by the DVDV mules cache);
 2. pulls **both** the addressee (`OSCI_ADDRESSEE`) and intermediary
    (`OSCI_INTERMEDIARY`) routes out of that single service description —
@@ -999,7 +1013,7 @@ client/mailbox.
 ### Laufzettel
 
 Each `request` / `send` produces a `Laufzettel(messageId, timestamp,
-recipientAgs, recipientUri, status, rawXml, warnings, contentSignature)`
+recipient, recipientUri, status, rawXml, warnings, contentSignature)`
 handed to a `LaufzettelSink[F]`:
 
 ```scala
@@ -1036,7 +1050,7 @@ trail, not just successes. For a failure Laufzettel:
 
 - `status` is `Feedback` with the `9xxx` code for an OSCI error response
   (`OsciError.OsciResponse`) and `Failed` with the error kind otherwise
-  (e.g. `OsciTransport`, `AgsNotInDvdv`);
+  (e.g. `OsciTransport`, `RecipientNotInDvdv`);
 - `messageId` is the id issued by `GetMessageId` when the delivery got that
   far, `""` otherwise;
 - `rawXml` is `None`, `warnings` is `Nil`;
@@ -1055,7 +1069,7 @@ All failures are an `OsciError` (a `RuntimeException`):
 |------------------------|------|
 | `UnknownTenant`        | facade dispatched to a tenant with no registered client |
 | `InvalidAgs`           | the given string is not a well-formed 8-digit AGS (raised by the `Ags` smart constructors) |
-| `AgsNotInDvdv`         | DVDV has no service registered for the AGS + service URI |
+| `RecipientNotInDvdv`   | DVDV has no service registered for the recipient key + service URI |
 | `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent or carries no `serviceElementUri` |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |

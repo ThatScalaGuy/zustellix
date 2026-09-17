@@ -16,6 +16,8 @@
 
 package de.thatscalaguy.zustellix.osci
 
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
+
 import java.net.URI
 import java.time.Instant
 
@@ -33,7 +35,7 @@ import java.time.Instant
 final case class Laufzettel(
     messageId:    String,
     timestamp:    Instant,
-    recipientAgs: Ags,
+    recipient:    OrganizationKey,
     recipientUri: URI,
     status:       LaufzettelStatus,
     rawXml:       Option[String] = None,

@@ -19,11 +19,22 @@ package de.thatscalaguy.zustellix.osci
 import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
 import org.typelevel.log4cats.LoggerFactory
 
+import scala.annotation.targetName
+
 trait OsciFacade[F[_]] {
-  def request(tenant: TenantId, ags: Ags, xml: String): F[OsciResponse]
-  def send(tenant: TenantId, ags: Ags, xml: String): F[OsciReceipt]
+  def request(tenant: TenantId, recipient: OrganizationKey, xml: String): F[OsciResponse]
+  def send(tenant: TenantId, recipient: OrganizationKey, xml: String): F[OsciReceipt]
+
+  @targetName("requestAgs")
+  final def request(tenant: TenantId, ags: Ags, xml: String): F[OsciResponse] =
+    request(tenant, ags.organizationKey, xml)
+
+  @targetName("sendAgs")
+  final def send(tenant: TenantId, ags: Ags, xml: String): F[OsciReceipt] =
+    send(tenant, ags.organizationKey, xml)
 
   /** Every tenant the underlying registry knows ([[TenantRegistry.list]]). */
   def tenants: F[Set[TenantId]]

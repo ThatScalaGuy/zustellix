@@ -19,11 +19,18 @@ package de.thatscalaguy.zustellix.osci
 import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import de.thatscalaguy.zustellix.dvdv.DvdvClient
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
 import de.thatscalaguy.zustellix.utils.cert.{CertManager, CertAlias}
 import org.typelevel.log4cats.LoggerFactory
 
 import de.osci.osci12.extinterfaces.TransportI
 
+import scala.annotation.targetName
+
+/** Recipients are addressed by their full DVDV organization key (e.g.
+ *  `ags:01001000`). The `Ags` variants are conveniences for municipalities —
+ *  they prepend the `ags:` prefix themselves.
+ */
 trait OsciClient[F[_]] {
 
   /** Synchronous request/response (`MediateDelivery`): the recipient answers
@@ -33,25 +40,32 @@ trait OsciClient[F[_]] {
    *  default — set [[OsciConfig.explicitDialog]] for an intermediary-issued
    *  id), `status` and `3xxx` warnings.
    */
-  def request(ags: Ags, xml: String): F[OsciResponse]
+  def request(recipient: OrganizationKey, xml: String): F[OsciResponse]
 
   /** Asynchronous send (`StoreDelivery`): stores the message in the
    *  recipient's mailbox at their intermediary and returns a receipt; the
    *  recipient fetches it later. Used by profiles like XFamilie.
    */
-  def send(ags: Ags, xml: String): F[OsciReceipt]
+  def send(recipient: OrganizationKey, xml: String): F[OsciReceipt]
+
+  // `Ags` and `OrganizationKey` both erase to String — hence the target names
+  @targetName("requestAgs")
+  final def request(ags: Ags, xml: String): F[OsciResponse] = request(ags.organizationKey, xml)
+
+  @targetName("sendAgs")
+  final def send(ags: Ags, xml: String): F[OsciReceipt] = send(ags.organizationKey, xml)
 }
 
 object OsciClient {
 
   /** Build a single-tenant OSCI/XMeld client.
    *
-   *  Per `request(ags, xml)`, the bundled `AgsResolver` performs a single DVDV
-   *  `findServiceDescription` call on the recipient AGS, and pulls both the
+   *  Per `request(recipient, xml)`, the bundled `AgsResolver` performs a single DVDV
+   *  `findServiceDescription` call on the recipient key, and pulls both the
    *  addressee (OSCI_ADDRESSEE) and intermediary (OSCI_INTERMEDIARY) routes
    *  out of the same service description. The DvdvClient's mules cache
    *  memoizes that response for `cacheConfig.findServiceDescriptionTtl`
-   *  (default 10 minutes), so repeated sends to the same AGS reuse it.
+   *  (default 10 minutes), so repeated sends to the same recipient reuse it.
    *
    *  The given DvdvClient is owned by the caller; this resource does not
    *  close it.

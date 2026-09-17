@@ -32,6 +32,6 @@ class LaufzettelStatusSpec extends FunSuite {
 
   test("render yields the plain code or error kind") {
     assertEquals(LaufzettelStatus.Feedback("0800").render, "0800")
-    assertEquals(LaufzettelStatus.Failed("AgsNotInDvdv").render, "AgsNotInDvdv")
+    assertEquals(LaufzettelStatus.Failed("RecipientNotInDvdv").render, "RecipientNotInDvdv")
   }
 }

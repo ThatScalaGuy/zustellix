@@ -16,6 +16,8 @@
 
 package de.thatscalaguy.zustellix.osci
 
+import de.thatscalaguy.zustellix.dvdv.model.OrganizationKey
+
 sealed abstract class OsciError(msg: String, cause: Throwable | Null = null)
     extends RuntimeException(msg, cause)
 
@@ -30,27 +32,27 @@ object OsciError {
   final case class InvalidAgs(input: String)
       extends OsciError(s"Invalid AGS '$input': expected exactly 8 digits")
 
-  final case class AgsNotInDvdv(ags: Ags, serviceUri: String)
+  final case class RecipientNotInDvdv(recipient: OrganizationKey, serviceUri: String)
       extends OsciError(
-        s"AGS '${ags.value}' has no service registered for '$serviceUri' in DVDV"
+        s"Recipient '${recipient.value}' has no service registered for '$serviceUri' in DVDV"
       )
 
-  /** The service description resolved for `ags` carries no cipher
+  /** The service description resolved for `recipient` carries no cipher
    *  certificate for the `kind` service element (`OSCI_ADDRESSEE` or
    *  `OSCI_INTERMEDIARY`).
    */
-  final case class RecipientCertMissing(ags: Ags, kind: String)
+  final case class RecipientCertMissing(recipient: OrganizationKey, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '${ags.value}' has no cipher certificate for '$kind'"
+        s"DVDV service description for '${recipient.value}' has no cipher certificate for '$kind'"
       )
 
-  /** The service description resolved for `ags` has no usable service
+  /** The service description resolved for `recipient` has no usable service
    *  element of type `kind` (`OSCI_ADDRESSEE` or `OSCI_INTERMEDIARY`): the
    *  element is absent, or present without a non-blank `serviceElementUri`.
    */
-  final case class ServiceElementMissing(ags: Ags, kind: String)
+  final case class ServiceElementMissing(recipient: OrganizationKey, kind: String)
       extends OsciError(
-        s"DVDV service description for AGS '${ags.value}' has no usable service element of type '$kind'"
+        s"DVDV service description for '${recipient.value}' has no usable service element of type '$kind'"
       )
 
   final case class OsciTransport(cause: Throwable)
