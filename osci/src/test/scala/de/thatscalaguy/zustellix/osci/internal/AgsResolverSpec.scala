@@ -114,7 +114,7 @@ class AgsResolverSpec extends CatsEffectSuite {
 
   test("resolve returns OsciRoute with addressee + intermediary from the same service description") {
     val dvdv = stubDvdv {
-      case ("ags:01001000", "http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl") =>
+      case ("ags:01001000", "http://www.osci.de/xmeld2611/xmeld2611Personensuche.wsdl") =>
         IO.pure(Some(serviceWithElements(List(
           element(ServiceElementType.OSCI_ADDRESSEE,    Some("https://recipient/osci"), Some(testCertB64)),
           element(ServiceElementType.OSCI_INTERMEDIARY, Some("https://intermed/osci"),  Some(testCertB64))

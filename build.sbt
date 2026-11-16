@@ -1,5 +1,5 @@
-ThisBuild / tlBaseVersion := "0.5"
-ThisBuild / scalaVersion := "3.3.6"
+ThisBuild / tlBaseVersion := "0.6"
+ThisBuild / scalaVersion := "3.3.8"
 ThisBuild / organization := "de.thatscalaguy"
 ThisBuild / organizationName := "ThatScalaGuy"
 ThisBuild / startYear := Some(2026)
@@ -8,15 +8,15 @@ ThisBuild / developers ++= List(
   tlGitHubDev("ThatScalaGuy", "Sven Herrmann")
 )
 
-val CatsEffectV = "3.7.0"
+val CatsEffectV = "3.7.1"
 val Http4sV = "0.23.36"
-val CirceV = "0.14.16"
-val MulesV = "0.7.0"
-val JwtScalaV = "11.0.4"
+val CirceV = "0.14.17"
+val MulesV = "0.8.0"
+val JwtScalaV = "12.0.0"
 val Log4catsV = "2.8.0"
-val BouncyV = "1.84"
-val MunitCEV = "2.2.0"
-val OsciBibV = "2.5.1"
+val BouncyV = "1.87"
+val MunitCEV = "2.2.1"
+val OsciBibV = "2.6.1"
 
 ThisBuild / tlJdkRelease := Some(11)
 ThisBuild / tlCiReleaseBranches := Seq()
@@ -24,7 +24,9 @@ ThisBuild / tlCiReleaseBranches := Seq()
 ThisBuild / tlCiScalafmtCheck := false
 
 ThisBuild / githubWorkflowJavaVersions := Seq(
+  JavaSpec.temurin("25"),
   JavaSpec.temurin("21"),
+  JavaSpec.temurin("17"),
   JavaSpec.temurin("11")
 )
 // clean.yml runs on every push and races the targets.tar handoff on tag builds

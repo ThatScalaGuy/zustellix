@@ -935,7 +935,7 @@ Properties-file format for `ConfigSource.file`:
 tenant.flensburg.cert.type        = pkcs12
 tenant.flensburg.cert.path        = /secrets/flensburg.p12
 tenant.flensburg.cert.password    = s3cret
-tenant.flensburg.serviceUri       = http://www.osci.de/xmeld2605/xmeld2605Personensuche.wsdl
+tenant.flensburg.serviceUri       = http://www.osci.de/xmeld2611/xmeld2611Personensuche.wsdl
 tenant.flensburg.subject          = XMeld
 tenant.flensburg.connectTimeoutMs = 5000
 tenant.flensburg.readTimeoutMs    = 60000

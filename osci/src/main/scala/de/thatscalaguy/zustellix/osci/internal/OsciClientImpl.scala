@@ -34,11 +34,11 @@ import org.typelevel.log4cats.LoggerFactory
 import java.net.URI
 
 private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
-    tenantId:  TenantId,
-    subject:   String,
+    tenantId: TenantId,
+    subject: String,
     transport: OsciTransport[F],
-    resolver:  AgsResolver[F],
-    sink:      LaufzettelSink[F],
+    resolver: AgsResolver[F],
+    sink: LaufzettelSink[F],
     capturePayloads: Boolean = false
 ) extends OsciClient[F] {
 
@@ -46,55 +46,62 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
 
   def request(recipient: OrganizationKey, xml: String): F[OsciResponse] =
     for {
-      route  <- resolver.resolve(recipient)
-                  .onError { case e => recordFailure(recipient, None, e) }
-      result <- transport.mediate(route, subject, xml)
-                  .onError { case e => recordFailure(recipient, Some(route.addresseeUri), e) }
-      now    <- Clock[F].realTimeInstant
-      lz      = Laufzettel(
-                  messageId    = result.messageId,
-                  timestamp    = now,
-                  recipient    = recipient,
-                  recipientUri = route.addresseeUri,
-                  status       = LaufzettelStatus.Feedback(result.status),
-                  rawXml       = if capturePayloads then result.responseXml else None,
-                  warnings     = result.warnings,
-                  contentSignature = result.signature
-                )
-      _      <- recordBestEffort(lz)
-    }
-    yield OsciResponse(
-      xml       = result.responseXml,
+      route <- resolver
+        .resolve(recipient)
+        .onError { case e => recordFailure(recipient, None, e) }
+      result <- transport
+        .mediate(route, subject, xml)
+        .onError { case e =>
+          recordFailure(recipient, Some(route.addresseeUri), e)
+        }
+      now <- Clock[F].realTimeInstant
+      lz = Laufzettel(
+        messageId = result.messageId,
+        timestamp = now,
+        recipient = recipient,
+        recipientUri = route.addresseeUri,
+        status = LaufzettelStatus.Feedback(result.status),
+        rawXml = if capturePayloads then result.responseXml else None,
+        warnings = result.warnings,
+        contentSignature = result.signature
+      )
+      _ <- recordBestEffort(lz)
+    } yield OsciResponse(
+      xml = result.responseXml,
       messageId = result.messageId,
-      status    = result.status,
-      warnings  = result.warnings
+      status = result.status,
+      warnings = result.warnings
     )
 
   def send(recipient: OrganizationKey, xml: String): F[OsciReceipt] =
     for {
-      route   <- resolver.resolve(recipient)
-                   .onError { case e => recordFailure(recipient, None, e) }
-      receipt <- transport.store(route, subject, xml)
-                   .onError { case e => recordFailure(recipient, Some(route.addresseeUri), e) }
-      now     <- Clock[F].realTimeInstant
-      lz       = Laufzettel(
-                   messageId    = receipt.messageId,
-                   timestamp    = now,
-                   recipient    = recipient,
-                   recipientUri = route.addresseeUri,
-                   status       = LaufzettelStatus.Feedback(receipt.status),
-                   rawXml       = None, // async: no response payload at store time
-                   warnings     = receipt.warnings
-                 )
-      _       <- recordBestEffort(lz)
-    }
-    yield receipt
+      route <- resolver
+        .resolve(recipient)
+        .onError { case e => recordFailure(recipient, None, e) }
+      receipt <- transport
+        .store(route, subject, xml)
+        .onError { case e =>
+          recordFailure(recipient, Some(route.addresseeUri), e)
+        }
+      now <- Clock[F].realTimeInstant
+      lz = Laufzettel(
+        messageId = receipt.messageId,
+        timestamp = now,
+        recipient = recipient,
+        recipientUri = route.addresseeUri,
+        status = LaufzettelStatus.Feedback(receipt.status),
+        rawXml = None, // async: no response payload at store time
+        warnings = receipt.warnings
+      )
+      _ <- recordBestEffort(lz)
+    } yield receipt
 
   /** Best-effort record: a sink failure is logged at warn and swallowed so it
-   *  never fails the operation nor masks an in-flight delivery error.
-   */
+    * never fails the operation nor masks an in-flight delivery error.
+    */
   private def recordBestEffort(lz: Laufzettel): F[Unit] =
-    sink.record(tenantId, lz)
+    sink
+      .record(tenantId, lz)
       .onError { case e =>
         log.warn(e)(
           "LaufzettelSink.record failed — Laufzettel dropped " +
@@ -106,23 +113,27 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
       .void
 
   /** Failed deliveries leave a Laufzettel too, so the audit trail is not
-   *  success-only: `status` is `Feedback` with the OSCI code for a `9xxx`
-   *  response and `Failed` with the error kind otherwise, `messageId` the id
-   *  from `GetMessageId` when one was issued before the failure ("" otherwise),
-   *  `rawXml` stays `None`. `recipientUri` is the resolved addressee URI, or
-   *  empty when the resolver itself failed. Recording is best-effort — the
-   *  original error is re-raised untouched, and a sink failure is logged at
-   *  warn and then swallowed like on the success path.
-   */
-  private def recordFailure(recipient: OrganizationKey, uri: Option[URI], e: Throwable): F[Unit] =
+    * success-only: `status` is `Feedback` with the OSCI code for a `9xxx`
+    * response and `Failed` with the error kind otherwise, `messageId` the id
+    * from `GetMessageId` when one was issued before the failure ("" otherwise),
+    * `rawXml` stays `None`. `recipientUri` is the resolved addressee URI, or
+    * empty when the resolver itself failed. Recording is best-effort — the
+    * original error is re-raised untouched, and a sink failure is logged at
+    * warn and then swallowed like on the success path.
+    */
+  private def recordFailure(
+      recipient: OrganizationKey,
+      uri: Option[URI],
+      e: Throwable
+  ): F[Unit] =
     Clock[F].realTimeInstant.flatMap { now =>
       val lz = Laufzettel(
-        messageId    = failureMessageId(e),
-        timestamp    = now,
-        recipient    = recipient,
+        messageId = failureMessageId(e),
+        timestamp = now,
+        recipient = recipient,
         recipientUri = uri.getOrElse(URI.create("")),
-        status       = failureStatus(e),
-        rawXml       = None
+        status = failureStatus(e),
+        rawXml = None
       )
       recordBestEffort(lz)
     }
@@ -130,7 +141,7 @@ private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
   private def failureStatus(e: Throwable): LaufzettelStatus =
     e match {
       case OsciError.OsciResponse(code, _, _) => LaufzettelStatus.Feedback(code)
-      case other                              => LaufzettelStatus.Failed(other.getClass.getSimpleName)
+      case other => LaufzettelStatus.Failed(other.getClass.getSimpleName)
     }
 
   private def failureMessageId(e: Throwable): String =
