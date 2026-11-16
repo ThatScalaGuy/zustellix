@@ -18,7 +18,6 @@ package de.thatscalaguy.zustellix.dvdv
 
 import cats.effect.{IO, Ref}
 import cats.effect.testkit.TestControl
-import cats.syntax.all.*
 import de.thatscalaguy.zustellix.utils.cert.{
   CertAlias,
   CertCredential,

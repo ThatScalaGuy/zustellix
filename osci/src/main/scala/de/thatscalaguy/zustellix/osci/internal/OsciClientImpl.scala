@@ -33,7 +33,7 @@ import org.typelevel.log4cats.LoggerFactory
 
 import java.net.URI
 
-private[osci] final class OsciClientImpl[F[_]: Sync: Clock: LoggerFactory](
+private[osci] final class OsciClientImpl[F[_]: Sync: LoggerFactory](
     tenantId: TenantId,
     subject: String,
     transport: OsciTransport[F],
