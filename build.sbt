@@ -1,5 +1,5 @@
 ThisBuild / tlBaseVersion := "0.6"
-ThisBuild / scalaVersion := "3.3.8"
+ThisBuild / scalaVersion := "3.10.1"
 ThisBuild / organization := "de.thatscalaguy"
 ThisBuild / organizationName := "ThatScalaGuy"
 ThisBuild / startYear := Some(2026)
