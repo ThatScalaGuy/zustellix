@@ -2,7 +2,7 @@
 // sbt-scalajs 0.6.x / sbt-scala-native 0.3.x deps predate Maven Central
 // publishing, but keep the crossproject core that TypelevelBspPlugin needs.
 addSbtPlugin(
-  ("org.typelevel" % "" % "0.8.6").excludeAll(
+  ("org.typelevel" % "sbt-typelevel" % "0.8.6").excludeAll(
     ExclusionRule("org.portable-scala"),
     ExclusionRule("org.scala-native")
   )
