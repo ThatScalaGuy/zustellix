@@ -18,7 +18,7 @@ messaging stack:
   PKCS12/PEM material, or resolve it by alias from an in-memory map or a
   hot-reloaded directory.
 
-Built on Scala 3 · Cats Effect 3 · http4s 0.23 (Ember) · circe · mules ·
+Built on Scala 3 (Java 17+) · Cats Effect 3 · http4s 0.23 (Ember) · circe · mules ·
 BouncyCastle · osci-bibliothek.
 
 Design principles:
@@ -57,11 +57,11 @@ osci ──▶ dvdv ──▶ utils
 
 ```scala
 // build.sbt — pick the module you need (transitive deps are pulled in)
-libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.3.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-osci"  % "0.6.0"
 // or just the directory client:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.3.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-dvdv"  % "0.6.0"
 // or only the cert utilities:
-libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.3.0"
+libraryDependencies += "de.thatscalaguy" %% "zustellix-utils" % "0.6.0"
 ```
 
 > **Migrating from 0.1.x:** `zustellix-osci-xmeld` is frozen at 0.1.1 and

@@ -18,7 +18,7 @@ val BouncyV = "1.87"
 val MunitCEV = "2.2.1"
 val OsciBibV = "2.6.1"
 
-ThisBuild / tlJdkRelease := Some(11)
+ThisBuild / tlJdkRelease := Some(17)
 ThisBuild / tlCiReleaseBranches := Seq()
 // the tree is not formatted per .scalafmt.conf; CI checks headers only
 ThisBuild / tlCiScalafmtCheck := false
@@ -26,8 +26,7 @@ ThisBuild / tlCiScalafmtCheck := false
 ThisBuild / githubWorkflowJavaVersions := Seq(
   JavaSpec.temurin("25"),
   JavaSpec.temurin("21"),
-  JavaSpec.temurin("17"),
-  JavaSpec.temurin("11")
+  JavaSpec.temurin("17")
 )
 // clean.yml runs on every push and races the targets.tar handoff on tag builds
 ThisBuild / githubWorkflowIncludeClean := false
