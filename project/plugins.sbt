@@ -7,4 +7,4 @@ addSbtPlugin(
     ExclusionRule("org.scala-native")
   )
 )
-addSbtPlugin("org.portable-scala" % "sbt-crossproject" % "1.3.2")
+addSbtPlugin("org.portable-scala" % "sbt-crossproject" % "1.4.0")
