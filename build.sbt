@@ -9,7 +9,7 @@ ThisBuild / developers ++= List(
 )
 
 val CatsEffectV = "3.7.1"
-val Http4sV = "0.23.36"
+val Http4sV = "0.23.37"
 val CirceV = "0.14.17"
 val MulesV = "0.8.0"
 val JwtScalaV = "12.0.0"
