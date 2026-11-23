@@ -9,3 +9,7 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    ignore:
+      # Library stays on Scala 3.3 LTS. Newer lines would force that version on all users.
+      - dependency-name: "org.scala-lang:scala3-library*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
