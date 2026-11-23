@@ -1072,6 +1072,7 @@ All failures are an `OsciError` (a `RuntimeException`):
 | `RecipientNotInDvdv`   | DVDV has no service registered for the recipient key + service URI |
 | `RecipientCertMissing` | the service description has no cipher certificate for the element in `kind` |
 | `ServiceElementMissing`| the `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element is absent or carries no `serviceElementUri` |
+| `AmbiguousServiceElement` | the service description has more than one `OSCI_ADDRESSEE` / `OSCI_INTERMEDIARY` element, or more than one standalone `CIPHER_CERTIFICATE` matches the fallback name, so the route is not unique |
 | `OsciTransport`        | osci-bibliothek transport / IO failure |
 | `OsciResponse`         | OSCI returned an error (`9xxx`) code — as feedback rows or as a SOAP fault; carries the `messageId` when one was already issued |
 | `NoSuchMessage`        | `fetch(messageId)` found no content for that id |
