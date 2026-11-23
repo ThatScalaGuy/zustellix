@@ -55,6 +55,16 @@ object OsciError {
         s"DVDV service description for '${recipient.value}' has no usable service element of type '$kind'"
       )
 
+  /** The service description resolved for `recipient` has `count` (> 1)
+   *  service elements of type `kind`, so the route is not unique. For
+   *  `CIPHER_CERTIFICATE` it counts the standalone cipher elements that share
+   *  the description name of an element without an inline cipher cert.
+   */
+  final case class AmbiguousServiceElement(recipient: OrganizationKey, kind: String, count: Int)
+      extends OsciError(
+        s"DVDV service description for '${recipient.value}' has $count service elements of type '$kind', expected exactly one"
+      )
+
   final case class OsciTransport(cause: Throwable)
       extends OsciError("OSCI transport failure", cause)
 

@@ -46,39 +46,52 @@ object AgsResolver {
 
       private def buildRoute(recipient: OrganizationKey, elems: List[ServiceElementInfo]): F[OsciRoute] = {
         def find(t: ServiceElementType): F[ServiceElementInfo] =
-          elems.find(_.serviceElementType.contains(t)) match {
-            case Some(e) => Sync[F].pure(e)
-            case None    => Sync[F].raiseError(OsciError.ServiceElementMissing(recipient, t.toString))
+          elems.filter(_.serviceElementType.contains(t)) match {
+            case e :: Nil => Sync[F].pure(e)
+            case Nil      => Sync[F].raiseError(OsciError.ServiceElementMissing(recipient, t.toString))
+            case many     => Sync[F].raiseError(OsciError.AmbiguousServiceElement(recipient, t.toString, many.size))
           }
 
         // An element's content-encryption cert is its inline cipher cert; if
-        // absent, a standalone CIPHER_CERTIFICATE element carrying the *same*
-        // serviceElementDescriptionName is the fallback (matched by name+type,
-        // never "first of type"). Applies to OSCI_ADDRESSEE and
-        // OSCI_INTERMEDIARY alike.
-        def cipherCertFor(e: ServiceElementInfo): Option[DvdvCert] =
-          e.cipherCertificate.orElse(
-            elems
-              .find(c =>
-                c.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE) &&
-                  c.serviceElementDescriptionName == e.serviceElementDescriptionName
-              )
-              .flatMap(_.cipherCertificate)
-          )
+        // absent, the one standalone CIPHER_CERTIFICATE element carrying the
+        // *same* serviceElementDescriptionName is the fallback (matched by
+        // name+type, never "first of type"). A missing or blank name has no
+        // fallback, or two unnamed elements would match each other. Applies to
+        // OSCI_ADDRESSEE and OSCI_INTERMEDIARY alike.
+        def cipherCertFor(e: ServiceElementInfo): F[Option[DvdvCert]] =
+          e.cipherCertificate match {
+            case some @ Some(_) => Sync[F].pure(some)
+            case None =>
+              nameOf(e).fold(Sync[F].pure(Option.empty[DvdvCert])) { name =>
+                elems.filter(c =>
+                  c.serviceElementType.contains(ServiceElementType.CIPHER_CERTIFICATE) &&
+                    nameOf(c).contains(name)
+                ) match {
+                  case Nil      => Sync[F].pure(None)
+                  case c :: Nil => Sync[F].pure(c.cipherCertificate)
+                  case many     => Sync[F].raiseError(
+                                     OsciError.AmbiguousServiceElement(recipient, "CIPHER_CERTIFICATE", many.size)
+                                   )
+                }
+              }
+          }
 
         for {
           addr       <- find(ServiceElementType.OSCI_ADDRESSEE)
           intm       <- find(ServiceElementType.OSCI_INTERMEDIARY)
           addrUri    <- requireUri(recipient, "OSCI_ADDRESSEE", addr)
           intUri     <- requireUri(recipient, "OSCI_INTERMEDIARY", intm)
-          addrCipher <- requireCipherCert(recipient, "OSCI_ADDRESSEE", cipherCertFor(addr))
-          intCipher  <- requireCipherCert(recipient, "OSCI_INTERMEDIARY", cipherCertFor(intm))
+          addrCipher <- cipherCertFor(addr).flatMap(requireCipherCert(recipient, "OSCI_ADDRESSEE", _))
+          intCipher  <- cipherCertFor(intm).flatMap(requireCipherCert(recipient, "OSCI_INTERMEDIARY", _))
           addrSig    <- addr.signatureCertificate.traverse(c =>
                           decodeCert(c).adaptError(t => OsciError.Certificate(t))
                         )
         }
         yield OsciRoute(addrUri, addrCipher, addrSig, intUri, intCipher)
       }
+
+      private def nameOf(e: ServiceElementInfo): Option[String] =
+        e.serviceElementDescriptionName.map(_.trim).filter(_.nonEmpty)
 
       private def requireUri(recipient: OrganizationKey, kind: String, e: ServiceElementInfo): F[URI] =
         e.serviceElementUri.map(_.trim).filter(_.nonEmpty) match {

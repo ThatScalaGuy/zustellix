@@ -55,6 +55,14 @@ class OsciErrorSpec extends FunSuite {
     assertEquals(e.kind, "OSCI_INTERMEDIARY")
   }
 
+  test("AmbiguousServiceElement message includes the recipient, the element kind and the count") {
+    val e = OsciError.AmbiguousServiceElement(Ags.unsafe("01001000").organizationKey, "OSCI_ADDRESSEE", 2)
+    assert(e.getMessage.contains("01001000"))
+    assert(e.getMessage.contains("OSCI_ADDRESSEE"))
+    assert(e.getMessage.contains("2 service elements"))
+    assertEquals(e.count, 2)
+  }
+
   test("OsciTransport preserves the cause") {
     val cause = new IOException("boom")
     val e     = OsciError.OsciTransport(cause)
@@ -98,6 +106,7 @@ class OsciErrorSpec extends FunSuite {
       OsciError.InvalidAgs("x"),
       OsciError.RecipientNotInDvdv(Ags.unsafe("01001000").organizationKey, "u"),
       OsciError.RecipientCertMissing(Ags.unsafe("01001000").organizationKey, "OSCI_ADDRESSEE"),
+      OsciError.AmbiguousServiceElement(Ags.unsafe("01001000").organizationKey, "OSCI_ADDRESSEE", 2),
       OsciError.OsciTransport(new IOException("x")),
       OsciError.OsciResponse("c", "d"),
       OsciError.NoSuchMessage("m"),
